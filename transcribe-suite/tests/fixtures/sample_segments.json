@@ -1,0 +1,22 @@
+[
+  {
+    "start": 0.0,
+    "end": 1.2,
+    "text": "euh salut tout le monde",
+    "speaker": "SPEAKER_00",
+    "words": [
+      {"start": 0.0, "end": 0.2, "word": "euh", "probability": 0.9},
+      {"start": 0.2, "end": 0.5, "word": "salut", "probability": 0.99}
+    ]
+  },
+  {
+    "start": 1.3,
+    "end": 3.0,
+    "text": "chat gpt est incroyable",
+    "speaker": "SPEAKER_00",
+    "words": [
+      {"start": 1.3, "end": 1.6, "word": "chat", "probability": 0.8},
+      {"start": 1.6, "end": 2.0, "word": "gpt", "probability": 0.85}
+    ]
+  }
+]

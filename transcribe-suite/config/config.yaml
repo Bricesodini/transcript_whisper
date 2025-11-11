@@ -1,0 +1,177 @@
+paths:
+  inputs_dir: inputs
+  work_dir: work
+  exports_dir: exports
+  logs_dir: logs
+  cache_dir: work/cache
+
+defaults:
+  lang: auto
+  detect_language: false
+  model: large-v3
+  profile: default
+  export_formats:
+    - md
+    - json
+    - vtt
+
+preproc:
+  target_sr: 16000
+  channels: 1
+  loudnorm: true
+  denoise: aggressive
+  vad:
+    enabled: true
+    silence_duration: 0.4
+    silence_threshold: -38
+
+segmenter:
+  segment_length: 75.0        # secondes
+  overlap: 8.0                # secondes
+  sample_rate: 16000
+  channels: 1
+  max_duration_error: 0.15
+  manifest_name: manifest.csv
+  vad:
+    enabled: false            # silero-vad (optionnel)
+    min_silence_ms: 3000
+    threshold: 0.2
+    provider: silero
+
+asr:
+  device: auto
+  compute_type: auto
+  temperature: 0.0
+  temperature_fallback: 0.2
+  beam_size: 1
+  best_of: 1
+  batch_size: 24
+  vad_filter: false
+  word_timestamps: false
+  condition_on_previous_text: false
+  no_speech_threshold: 0.6
+  max_workers: 10
+  max_retries: 2
+  initial_prompt: null
+
+align:
+  language: auto
+  device: auto
+  model_name: null
+
+languages:
+  fr:
+    fillers: ["euh", "heu", "tu vois", "en fait", "bah", "donc", "voilà"]
+  en:
+    fillers: ["uh", "um", "like", "you know", "actually", "so", "well"]
+
+diarization:
+  model: pyannote/speaker-diarization-3.1
+  authorization_env: PYANNOTE_TOKEN
+  merge_single_speaker: true
+  max_speakers: 2
+  min_speaker_turn: 1.2
+
+cleaning:
+  min_segment_duration: 1.2
+  max_segment_gap: 2.0
+  remove_fillers: true
+  fillers:
+    fr: ["euh", "heu", "tu vois", "en fait", "bah", "donc", "voilà"]
+    en: ["uh", "um", "like", "you know", "actually", "so", "well"]
+  capitalize_sentence_start: true
+  fix_proper_nouns:
+    - ["chat gpt", "ChatGPT"]
+    - ["chat  gpt", "ChatGPT"]
+  min_word_confidence: 0.15
+  merge_short_segments:
+    enabled: true
+    max_duration: 0.8
+    max_gap: 0.5
+
+structure:
+  target_section_duration: 180 # seconds (~3 min)
+  max_section_duration: 480 # seconds (~8 min)
+  min_pause_gap: 4.0 # seconds between sections
+  soft_min_duration: null
+  quote_window: 12.0
+  trim_section_titles: true
+  title_case: sentence
+  enable_titles: false
+
+polish:
+  enabled: true
+  sentence_case: true
+  max_sentence_words: 18
+  join_short_segments_ms: 650
+  acronym_whitelist:
+    - IA
+  fr_nbsp_before: [":", ";", "»", "!", "?"]
+  fr_nbsp_after: ["«"]
+  enable_nbsp: true
+  normalize_list_markers: true
+  list_bullet_symbol: "•"
+  normalize_ellipses: true
+  normalize_quotes: true
+  ensure_terminal_punct: true
+  replacements:
+    - ["chat gpt", "ChatGPT"]
+    - [" i a ", " IA "]
+    - ["l ' ia", "l’IA"]
+    - ["d ' ia", "d’IA"]
+  lexicon:
+    - pattern: "\\bchat\\s*gpt\\b"
+      replacement: "ChatGPT"
+    - pattern: "\\bi[\\.\\s]*a\\b"
+      replacement: "IA"
+    - pattern: "\\bpodcat(?P<plural>s)?\\b"
+      replacement: "podcast\\g<plural>"
+    - pattern: "\\bpar[\\s-]+dessus\\b"
+      replacement: "par-dessus"
+
+  stopwords:
+    fr: ["le","la","les","un","une","de","des","du","et","ou","en","à","au","aux","pour","par","sur","dans","avec","ce","cet","cette","ces","que","qui","quoi","dont","ne","pas","plus","très","comme","on","nous","vous","ils","elles","je","tu","il","elle","est","sont","être","avoir","faire","ça","c’est","voilà","donc","il y a","c'était"]
+    en: ["the","a","an","of","and","or","to","for","on","in","with","this","that","these","those","who","what","which","not","very","like","we","you","they","i","is","are","be","have","do","it","so"]
+
+export:
+  subtitle_line_length: 72
+  json_indent: 2
+  low_confidence:
+    threshold: 0.5
+    csv_threshold: 0.35
+    csv_enabled: true
+    csv_output: null
+    formats:
+      txt:
+        template: "**[{word}?]**"
+      md:
+        template: "**[{word}?]**"
+
+refine:
+  enabled: true
+  low_conf_threshold: 0.5
+  min_low_conf_ratio: 0.1
+  padding: 0.25
+  max_segment_duration: 25.0
+  beam_size: 7
+  vad_filter: false
+  temperature: 0.0
+  clip_sample_rate: 16000
+  cleanup_clips: true
+  window_tolerance: 0.15
+
+profiles:
+  default:
+    description: Balanced preset for most recordings
+  talkshow:
+    description: Aggressive diarization for multi-speaker content
+    structure:
+      target_section_duration: 150
+      min_pause_gap: 4.0
+      quote_window: 10.0
+  conference:
+    description: Long-form talks with conservative chaptering
+    structure:
+      target_section_duration: 240
+      max_section_duration: 540
+      min_pause_gap: 8.0

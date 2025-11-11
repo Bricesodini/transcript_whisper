@@ -1,0 +1,129 @@
+from pathlib import Path
+from typing import Dict, List
+
+import torch
+
+from utils import PipelineError, read_json, sanitize_whisper_text, write_json
+
+try:
+    import whisperx
+except ImportError as exc:  # pragma: no cover
+    whisperx = None
+    IMPORT_ERROR = exc
+else:
+    IMPORT_ERROR = None
+
+
+class Aligner:
+    def __init__(self, config: Dict, logger):
+        self.logger = logger
+        self.cfg = config.get("align", {})
+        requested_device = self.cfg.get("device", config.get("asr", {}).get("device", "auto"))
+        self.device = self._resolve_device(requested_device)
+        self._cache = {}
+
+    def prewarm(self, language: str) -> None:
+        lang = language or "en"
+        try:
+            self._load_align_model(lang)
+        except PipelineError:
+            raise
+
+    def _load_align_model(self, language: str):
+        if whisperx is None:
+            raise PipelineError(f"whisperx non disponible: {IMPORT_ERROR}")
+        lang = language or "en"
+        if lang in self._cache:
+            return self._cache[lang]
+        self.logger.info("Chargement du modèle d'alignement WhisperX (%s)", lang)
+        model_name = self.cfg.get("model_name")
+        align_model, metadata = whisperx.load_align_model(
+            language_code=lang,
+            device=self.device,
+            model_name=model_name,
+        )
+        self._cache[lang] = (align_model, metadata)
+        return align_model, metadata
+
+    def _assign_speakers(self, segments: List[Dict], diar_segments: List[Dict]) -> None:
+        if not diar_segments:
+            return
+
+        def find_speaker(ts: float) -> str:
+            for segment in diar_segments:
+                if segment["start"] <= ts <= segment["end"]:
+                    return segment["speaker"]
+            return diar_segments[-1]["speaker"]
+
+        for seg in segments:
+            midpoint = (seg["start"] + seg["end"]) / 2
+            speaker = find_speaker(midpoint)
+            seg["speaker"] = speaker
+            for word in seg.get("words", []):
+                w_mid = (word["start"] + word["end"]) / 2
+                word["speaker"] = find_speaker(w_mid)
+
+    def run(
+        self,
+        audio_path: Path,
+        asr_result: Dict,
+        diarization_result: Dict,
+        work_dir: Path,
+        force: bool = False,
+    ) -> Dict:
+        language = asr_result.get("language") or "en"
+        aligned_path = work_dir / "03_aligned_whisperx.json"
+        if aligned_path.exists() and not force:
+            payload = read_json(aligned_path)
+            self.logger.info("Alignement WhisperX (cache) ➜ %s", aligned_path)
+            return {
+                "segments": payload.get("segments", []),
+                "language": payload.get("language", language),
+                "path": aligned_path,
+            }
+        align_model, metadata = self._load_align_model(language)
+        if asr_result.get("segments"):
+            self.logger.info("🔍 AVANT WhisperX align: %s", repr(asr_result["segments"][0].get("text", "")[:80]))
+        aligned = whisperx.align(
+            asr_result["segments"],
+            align_model,
+            metadata,
+            str(audio_path),
+            device=self.device,
+        )
+        aligned_segments = aligned.get("segments", [])
+        if aligned_segments:
+            self.logger.info("🔍 APRÈS WhisperX align: %s", repr(aligned_segments[0].get("text", "")[:80]))
+        for segment in aligned.get("segments", []):
+            if "text" in segment:
+                self.logger.info("🔍 Avant sanitize align: %s", repr(segment["text"][:80]))
+                segment["text"] = sanitize_whisper_text(segment["text"])
+                self.logger.info("✅ Après sanitize align: %s", repr(segment["text"][:80]))
+            for word in segment.get("words", []):
+                if "word" in word:
+                    word["word"] = sanitize_whisper_text(word["word"])
+        diar_segments = diarization_result.get("segments", []) if diarization_result else []
+        self._assign_speakers(aligned.get("segments", []), diar_segments)
+        aligned.setdefault("language", language)
+        aligned_path.parent.mkdir(parents=True, exist_ok=True)
+        write_json(aligned_path, aligned)
+        log_path = work_dir / "logs" / "align.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("w", encoding="utf-8") as handle:
+            handle.write(f"Alignement WhisperX OK ({len(aligned_segments)} segments)\n")
+        return {"segments": aligned.get("segments", []), "language": language, "path": aligned_path}
+
+    def _resolve_device(self, requested: str) -> str:
+        req = (requested or "auto").lower()
+        if req == "auto":
+            if torch.cuda.is_available():
+                return "cuda"
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                return "mps"
+            return "cpu"
+        if req == "metal":
+            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                return "mps"
+            self.logger.warning("Device 'metal' indisponible, repli sur CPU.")
+            return "cpu"
+        return req
