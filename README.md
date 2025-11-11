@@ -149,6 +149,15 @@ bin/env_check.sh
 - vérifie `python`, `pip`, `ffmpeg`, `ctranslate2`, `faster-whisper`, `pyannote.audio`, `whisperx`.
 - tolère un warning `torchaudio` sur Apple Silicon (Homebrew ne shippe pas les wheels Metal) : il est ignoré car la pipeline n'importe pas torchaudio, seules les bindings `soundfile` / `ffmpeg` sont utilisés.
 
+### Stable Base
+
+(extrait mis à jour)
+
+- faster-whisper 1.2.1 (CPU Apple Accelerate)
+- torch / torchaudio 2.8.0
+- pyannote.audio 3.4.0
+- onnxruntime 1.23.2
+
 > **Accélération Metal (expérimentale et optionnelle)**  
 > `brew install ctranslate2` puis :  
 > `pip install --no-binary faster-whisper faster-whisper`  
@@ -178,15 +187,15 @@ bin/run.sh resume --input "/chemin/vers/podcast.mp4"
 bin/run.sh dry-run --input "/chemin/vers/podcast.mp4"
 ```
 
-**Apple Shortcuts**
+### Apple Shortcuts
 
 ```bash
 cd /Users/bricesodini/01_ai-stack/scripts/transcript_whisper/transcribe-suite \
   && source .venv/bin/activate \
-  && NO_TK=1 bin/run.sh --input "$@"
+  && NO_TK=1 bin/run.sh run --input "$@"
 ```
 
-> Entrée Shortcuts = « en arguments ».
+> Entrée Shortcuts = « en arguments ». Pour du multi-voix, ajoute `--mode multi --speech-mask --diar-device cpu --num-speakers auto`.
 
 ---
 

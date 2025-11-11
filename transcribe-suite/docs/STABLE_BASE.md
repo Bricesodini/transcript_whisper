@@ -6,12 +6,13 @@ Cette page décrit l’empreinte verrouillée utilisée pour rejouer la pipeline
 
 | Composant            | Version | Remarques |
 |----------------------|---------|-----------|
-| Python               | 3.11.x  | vérifié via `bin/env_check.sh` (patch loggué) |
-| faster-whisper (MLX) | 1.1.1   | Metal activé, `device=metal` |
+| Python               | 3.11.x  | vérifié via `bin/env_check.sh` |
+| faster-whisper       | 1.2.1   | backend Apple Accelerate (MPS facultatif) |
 | whisperx             | 3.7.4   | modèle align FR |
-| pyannote.audio       | 3.3.2   | checkpoint HF pin |
-| torch / torchaudio   | 2.2.2   | build arm64 |
-| onnxruntime          | 1.17.1  | dépendance WhisperX |
+| pyannote.audio       | 3.4.0   | checkpoint HF pin |
+| torch / torchaudio   | 2.8.0   | build arm64 |
+| onnxruntime          | 1.23.2  | dépendance WhisperX |
+| ctranslate2          | 4.6.1   | compile CPU Apple |
 | ffmpeg / ffprobe     | 6.x–8.x | compat Homebrew macOS, version exacte consignée |
 
 Le fichier `requirements.lock` capture exactement ces versions. Le script `bin/env_check.sh` échoue si la machine active diffère (Python, libs Python, ffmpeg).
@@ -20,7 +21,7 @@ Le fichier `requirements.lock` capture exactement ces versions. Le script `bin/e
 
 - Segmentation: fenêtres 75 s, overlap 8 s, mono 16 kHz.
 - Prétraitement: loudnorm + mono, VAD désactivée.
-- ASR: Faster-Whisper `large-v3`, `beam_size=1`, `best_of=1`, `temperature={0.0,0.2}`, `no_speech_threshold=0.6`, `max_workers=8`.
+- ASR: Faster-Whisper `large-v3`, `beam_size=1`, `best_of=1`, `temperature={0.0,0.2}`, `no_speech_threshold=0.6`, `max_workers=8`, `device=auto`.
 - Diarisation par défaut: mode monologue (`max_speakers=1`, `min_speaker_turn=1.3`).
 - Alignement: WhisperX forcé en `fr`.
 - Exports stricts: `.md`, `.json`, `.vtt` + `.low_confidence.csv`.
@@ -30,7 +31,7 @@ Le fichier `requirements.lock` capture exactement ces versions. Le script `bin/e
 
 | Flag | Effet |
 |------|-------|
-| `--mode multi` | Autorise un profil multi-speakers (l’utilisateur doit aussi régler `--diarization-max-speakers`). |
+| `--mode multi` | Active la diarisation multi-speakers (tu peux compléter avec `--num-speakers` ou `--diarization-max-speakers`). |
 | `--diarization-max-speakers / --diarization-min-speaker-turn` | Overrides ponctuels. |
 | `--low-confidence-threshold`, `--low-confidence-out` | QA confiance personnalisée. |
 | `--chapters-min-duration` | Force un découpage doux (en secondes). |
@@ -56,10 +57,10 @@ Chaque exécution génère :
   - stats ASR (processed / skipped / retries / workers)
   - versions des libs (python, torch, whisper, ffmpeg)
   - statut final (`ok` ou `failed`).
-- `exports/<video>/` doit contenir **exactement** : `.md`, `.json`, `.vtt`, `.low_confidence.csv`.
+- `exports/<video>/` doit contenir **exactement** : `.md`, `.json`, `.vtt`, `.chapters.json`, `.low_confidence.csv`.
 - `work/<video>/` doit contenir `audio_16k.wav`, `manifest.csv`, `02_merged_raw.json`, `03_aligned_whisperx.json`, `04_cleaned.json`, `05_polished.json`.
 
-Le script `bin/env_check.sh` (ci-dessous) doit être vert **avant** toute exécution :
+Le script `bin/env_check.sh` doit être vert **avant** toute exécution :
 
 ```bash
 source .venv/bin/activate

@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 import csv
 import json
+import os
 import re
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -98,7 +100,7 @@ class Exporter:
         separator = "," if fmt == "srt" else "."
         lines: List[str] = []
         if fmt == "vtt":
-            lines.extend(["WEBVTT", ""]) 
+            lines.extend(["WEBVTT", ""])
         for idx, seg in enumerate(segments, 1):
             start = self._format_timestamp(seg["start"], separator=separator)
             end = self._format_timestamp(seg["end"], separator=separator)
@@ -110,6 +112,21 @@ class Exporter:
         text = "\n".join(lines).rstrip() + "\n\n"
         _write_utf8(path, text)
 
+    def _write_json_export(self, path: Path, structure: Dict, segments: List[Dict], aligned_path: Path) -> None:
+        payload = {
+            "meta": {"language": structure.get("language"), "aligned": str(aligned_path)},
+            "sections": structure.get("sections", []),
+            "segments": segments,
+        }
+        with path.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=self.cfg.get("json_indent", 2))
+
+    def _write_jsonl(self, path: Path, segments: List[Dict]) -> None:
+        with path.open("w", encoding="utf-8", newline="\n") as handle:
+            for segment in segments:
+                handle.write(json.dumps(segment, ensure_ascii=False))
+                handle.write("\n")
+
     def run(
         self,
         base_name: str,
@@ -118,40 +135,86 @@ class Exporter:
         structure: Dict,
         aligned_path: Path,
         formats: List[str] = None,
+        parallel: Optional[bool] = None,
     ) -> Dict:
         out_dir.mkdir(parents=True, exist_ok=True)
-        formats = formats or self.default_formats
-        artifacts = {}
-
-        for fmt in formats:
-            fmt = fmt.lower()
-            outfile = out_dir / f"{base_name}.{fmt}"
-            if fmt == "txt":
-                text = self._write_txt(outfile, segments)
-                artifacts["txt"] = outfile
-                copy_to_clipboard(text, self.logger)
-            elif fmt == "md":
-                self._write_md(outfile, structure, segments)
-                artifacts["md"] = outfile
-            elif fmt == "json":
-                payload = {
-                    "meta": {"language": structure.get("language"), "aligned": str(aligned_path)},
-                    "sections": structure.get("sections", []),
-                    "segments": segments,
+        target_formats = self._resolve_formats(formats or self.default_formats)
+        artifacts: Dict[str, Path] = {}
+        if not target_formats:
+            return artifacts
+        parallel_requested = parallel if parallel is not None else bool(self.cfg.get("parallel"))
+        jobs = [(fmt, out_dir / f"{base_name}.{fmt}") for fmt in target_formats]
+        if parallel_requested and len(jobs) > 1:
+            max_workers = self._parallel_workers(len(jobs))
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {
+                    pool.submit(
+                        self._export_single_format,
+                        fmt,
+                        path,
+                        base_name,
+                        segments,
+                        structure,
+                        aligned_path,
+                    ): fmt
+                    for fmt, path in jobs
                 }
-                with outfile.open("w", encoding="utf-8", newline="\n") as handle:
-                    json.dump(payload, handle, ensure_ascii=False, indent=self.cfg.get("json_indent", 2))
-                artifacts["json"] = outfile
-            elif fmt in {"srt", "vtt"}:
-                self._write_srt_vtt(outfile, segments, fmt)
-                artifacts[fmt] = outfile
-            elif fmt == "clean_txt":
-                self._write_clean_txt(outfile, structure, segments)
-                artifacts[fmt] = outfile
+                for future in as_completed(futures):
+                    fmt_key, outfile = future.result()
+                    artifacts[fmt_key] = outfile
+        else:
+            for fmt, path in jobs:
+                fmt_key, outfile = self._export_single_format(fmt, path, base_name, segments, structure, aligned_path)
+                artifacts[fmt_key] = outfile
 
         self._maybe_write_low_conf_csv(base_name, out_dir, segments)
-
         return artifacts
+
+    def _resolve_formats(self, formats: List[str]) -> List[str]:
+        ordered: List[str] = []
+        for fmt in formats:
+            fmt_key = str(fmt).strip().lower()
+            if not fmt_key or fmt_key in ordered:
+                continue
+            ordered.append(fmt_key)
+        return ordered
+
+    def _parallel_workers(self, task_count: int) -> int:
+        env_threads = os.environ.get("POST_THREADS")
+        try:
+            cap = int(env_threads) if env_threads else 0
+        except ValueError:
+            cap = 0
+        logical = os.cpu_count() or 4
+        limit = cap or logical
+        return max(2, min(task_count, limit))
+
+    def _export_single_format(
+        self,
+        fmt: str,
+        outfile: Path,
+        base_name: str,
+        segments: List[Dict],
+        structure: Dict,
+        aligned_path: Path,
+    ) -> Tuple[str, Path]:
+        fmt_key = fmt.lower()
+        if fmt_key == "txt":
+            text = self._write_txt(outfile, segments)
+            copy_to_clipboard(text, self.logger)
+        elif fmt_key == "md":
+            self._write_md(outfile, structure, segments)
+        elif fmt_key == "json":
+            self._write_json_export(outfile, structure, segments, aligned_path)
+        elif fmt_key == "jsonl":
+            self._write_jsonl(outfile, segments)
+        elif fmt_key in {"srt", "vtt"}:
+            self._write_srt_vtt(outfile, segments, fmt_key)
+        elif fmt_key == "clean_txt":
+            self._write_clean_txt(outfile, structure, segments)
+        else:
+            self.logger.warning("Format export inconnu: %s", fmt_key)
+        return fmt_key, outfile
 
     def _parse_low_conf_formats(self, formats_cfg) -> Dict[str, str]:
         formats: Dict[str, str] = {}
@@ -299,31 +362,36 @@ class Exporter:
         if threshold is None:
             return
         rows = self._collect_low_conf_rows(segments, threshold)
-        if not rows:
-            return
-        clusters = self._build_low_conf_clusters(rows)
+        clusters = self._build_low_conf_clusters(rows) if rows else []
         outfile = Path(self.low_conf_csv_output) if self.low_conf_csv_output else out_dir / f"{base_name}.low_confidence.csv"
         outfile.parent.mkdir(parents=True, exist_ok=True)
         with outfile.open("w", encoding="utf-8", newline="\n") as handle:
             writer = csv.writer(handle)
             writer.writerow(["word", "start_ms", "end_ms", "score", "segment_id"])
             for row in rows:
-                writer.writerow([
-                    row["word"],
-                    row["start_ms"],
-                    row["end_ms"],
-                    f"{row['score']:.3f}",
-                    row["segment_id"],
-                ])
+                writer.writerow(
+                    [
+                        row["word"],
+                        row["start_ms"],
+                        row["end_ms"],
+                        f"{row['score']:.3f}",
+                        row["segment_id"],
+                    ]
+                )
             for cluster in clusters:
-                writer.writerow([
-                    f"[cluster] {cluster['word']}",
-                    cluster["start_ms"],
-                    cluster["end_ms"],
-                    f"{cluster['score']:.3f}",
-                    cluster["segment_id"],
-                ])
-        self.logger.info("Low-confidence CSV ➜ %s (%d mots)", outfile, len(rows))
+                writer.writerow(
+                    [
+                        f"[cluster] {cluster['word']}",
+                        cluster["start_ms"],
+                        cluster["end_ms"],
+                        f"{cluster['score']:.3f}",
+                        cluster["segment_id"],
+                    ]
+                )
+        if rows:
+            self.logger.info("Low-confidence CSV ➜ %s (%d mots)", outfile, len(rows))
+        else:
+            self.logger.info("Low-confidence CSV ➜ %s (aucun mot sous %.3f)", outfile, threshold)
 
     def _collect_low_conf_rows(self, segments: List[Dict], threshold: float) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []

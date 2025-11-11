@@ -7,10 +7,10 @@ rich>=13.7
 huggingface-hub>=0.19
 langdetect>=1.0.9
 
-torch==2.8.0 ; platform_system == "Darwin" and platform_machine == "arm64"
-torchaudio==2.8.0 ; platform_system == "Darwin" and platform_machine == "arm64"
+torch ; platform_system == "Darwin" and platform_machine == "arm64"
+torchaudio ; platform_system == "Darwin" and platform_machine == "arm64"
 
-whisperx==3.7.4
+whisperx
 pyannote.audio>=3.3.2,<4.0.0
-faster-whisper>=1.1.1
+faster-whisper
 psutil>=5.9

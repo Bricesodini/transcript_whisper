@@ -11,7 +11,7 @@ FFMPEG_MIN_MAJOR=6
 FFMPEG_MAX_MAJOR=8
 
 REQUIRED_PKGS=(
-  "faster-whisper=1.1.1"
+  "faster-whisper=1.2.1"
   "whisperx=3.7.4"
   "pyannote.audio=3.4.0"
   "torch=2.8.0"
@@ -85,5 +85,11 @@ check_ff_bin() {
 
 FFMPEG_VERSION=$(check_ff_bin ffmpeg "ffmpeg")
 FFPROBE_VERSION=$(check_ff_bin ffprobe "ffprobe")
+
+echo ">>> Checking Metal (optional, not required)..."
+$PYTHON_BIN - <<'PY'
+import torch
+print("torch.backends.mps.is_available() =", torch.backends.mps.is_available())
+PY
 
 echo "Environnement conforme aux exigences verrouillées (Python $PY_VERSION, ffmpeg $FFMPEG_VERSION, ffprobe $FFPROBE_VERSION)."

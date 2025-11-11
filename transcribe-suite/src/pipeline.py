@@ -22,6 +22,8 @@ from segmenter import Segmenter
 from structure import Structurer
 from utils import (
     PipelineError,
+    apply_thread_env,
+    compute_post_threads,
     load_config,
     normalize_media_path,
     prepare_paths,
@@ -69,6 +71,26 @@ def parse_args():
     parser.add_argument("--low-confidence-threshold", type=float, dest="low_conf_threshold", help="Override low-confidence threshold")
     parser.add_argument("--low-confidence-out", dest="low_conf_out", help="Chemin CSV low-confidence")
     parser.add_argument("--chapters-min-duration", type=float, dest="chapters_min_duration", help="Soft min duration (s) pour forcer les chapitres")
+    parser.add_argument("--compute-type", dest="compute_type", help="Override faster-whisper compute_type (int8/float16/auto)")
+    parser.add_argument("--chunk-length", dest="chunk_length", type=float, help="Override chunk_length (s) pour Faster-Whisper")
+    parser.add_argument("--asr-workers", dest="asr_workers", type=int, help="Override max_workers ASR parallèles")
+    parser.add_argument("--vad", dest="vad_filter", action="store_true", help="Force le VAD interne Faster-Whisper")
+    parser.add_argument("--no-vad", dest="vad_filter", action="store_false", help="Désactive le VAD interne Faster-Whisper")
+    parser.add_argument("--condition-off", dest="condition_off", action="store_true", help="Désactive condition_on_previous_text pour l'ASR")
+    parser.add_argument("--align-workers", dest="align_workers", type=int, help="Workers WhisperX align (num_workers)")
+    parser.add_argument("--align-batch", dest="align_batch", type=int, help="Batch size WhisperX align")
+    parser.add_argument("--speech-only", dest="speech_only", action="store_true", help="Aligne uniquement les segments marqués speech")
+    parser.add_argument("--no-speech-only", dest="speech_only", action="store_false", help="Désactive le filtrage speech-only")
+    parser.add_argument("--diar-device", dest="diar_device", help="Device Pyannote (cpu/cuda/mps)")
+    parser.add_argument("--seg-batch", dest="seg_batch", type=int, help="Batch size segmentation Pyannote")
+    parser.add_argument("--emb-batch", dest="emb_batch", type=int, help="Batch size embedding Pyannote")
+    parser.add_argument("--num-speakers", dest="num_speakers", type=int, help="Nombre de speakers attendu (hint)")
+    parser.add_argument("--speech-mask", dest="speech_mask", action="store_true", help="Applique un masque speech aux étapes post-ASR")
+    parser.add_argument("--no-speech-mask", dest="speech_mask", action="store_false", help="Désactive le masque speech")
+    parser.add_argument("--export-parallel", dest="export_parallel", action="store_true", help="Exports finaux en parallèle")
+    parser.add_argument("--export-serial", dest="export_parallel", action="store_false", help="Exports finaux en série")
+    parser.set_defaults(vad_filter=None)
+    parser.set_defaults(speech_only=None, speech_mask=None, export_parallel=None)
     args = parser.parse_args()
     if args.strict is None:
         args.strict = True
@@ -144,6 +166,7 @@ class PipelineRunner:
                 raise PipelineError(f"Formats non autorisés en mode strict: {', '.join(invalid)}")
         if self.strict and not self.export_formats:
             self.export_formats = sorted(self.allowed_exports)
+        self.export_parallel = bool(config.get("export", {}).get("parallel", False))
         self.force = bool(args.force)
         self.initial_prompt = args.initial_prompt
         self.skip_diarization = bool(args.skip_diarization)
@@ -155,6 +178,8 @@ class PipelineRunner:
 
         self.preferred_align_lang = self.requested_lang if self.requested_lang and self.requested_lang != "auto" else "fr"
         self._models_prewarmed = False
+        self.post_threads = compute_post_threads()
+        self._post_env_applied = False
 
         config = self.config
         self.preproc = Preprocessor(config, self.logger)
@@ -207,6 +232,43 @@ class PipelineRunner:
         if args.chapters_min_duration is not None:
             struct_cfg = config.setdefault("structure", {})
             struct_cfg["soft_min_duration"] = float(args.chapters_min_duration)
+
+        asr_cfg = config.setdefault("asr", {})
+        if args.compute_type:
+            asr_cfg["compute_type"] = args.compute_type
+        if args.chunk_length is not None:
+            asr_cfg["chunk_length"] = float(args.chunk_length)
+        if args.asr_workers is not None:
+            asr_cfg["max_workers"] = max(1, int(args.asr_workers))
+        if args.vad_filter is not None:
+            asr_cfg["vad_filter"] = bool(args.vad_filter)
+        if getattr(args, "condition_off", False):
+            asr_cfg["condition_on_previous_text"] = False
+        if args.export_parallel is not None:
+            export_cfg["parallel"] = bool(args.export_parallel)
+
+        align_cfg = config.setdefault("align", {})
+        if args.align_workers is not None:
+            align_cfg["workers"] = max(1, int(args.align_workers))
+        if args.align_batch is not None:
+            align_cfg["batch_size"] = max(1, int(args.align_batch))
+        if args.speech_only is not None:
+            align_cfg["speech_only"] = bool(args.speech_only)
+
+        diar_cfg = config.setdefault("diarization", {})
+        if args.diar_device:
+            diar_cfg["device"] = args.diar_device
+        if args.seg_batch is not None:
+            diar_cfg["segmentation_batch"] = max(1, int(args.seg_batch))
+        if args.emb_batch is not None:
+            diar_cfg["embedding_batch"] = max(1, int(args.emb_batch))
+        if args.num_speakers is not None:
+            diar_cfg["max_speakers"] = max(1, int(args.num_speakers))
+        if args.speech_mask is not None:
+            diar_cfg["speech_mask"] = bool(args.speech_mask)
+
+    def _ensure_post_env(self) -> None:
+        apply_thread_env("POST_THREADS", self.post_threads)
 
     def _validate_config_or_raise(self) -> None:
         required_sections = {
@@ -318,6 +380,7 @@ class PipelineRunner:
 
     def stage_diarization(self) -> Dict[str, Any]:
         stage_start = time.time()
+        self._ensure_post_env()
         if self.skip_diarization or self.diarizer is None:
             if not self.diarization_result:
                 self.logger.warning("Diarisation désactivée (option --skip-diarization)")
@@ -328,14 +391,19 @@ class PipelineRunner:
             self._mark_stage_duration("diarize", stage_start)
             return self.diarization_result
         audio_path = self.ensure_audio_ready()
+        merged = self.merged_info or self.stage_merge()
+        speech_segments = None
+        if getattr(self.diarizer, "speech_mask_enabled", False) and merged:
+            speech_segments = merged.get("segments")
         with stage_timer(self.logger, "Diarisation Pyannote"):
-            self.diarization_result = self.diarizer.run(audio_path, self.work_dir)
+            self.diarization_result = self.diarizer.run(audio_path, self.work_dir, speech_segments=speech_segments)
         self._mark_stage_duration("diarize", stage_start)
         return self.diarization_result
 
     def stage_align(self) -> Dict[str, Any]:
         stage_start = time.time()
         self.logger.info("▶ ALIGN")
+        self._ensure_post_env()
         merged = self.merged_info or self.stage_merge()
         diarization_result = self.stage_diarization()
         audio_path = self.ensure_audio_ready()
@@ -357,6 +425,7 @@ class PipelineRunner:
     def stage_post(self) -> Dict[str, Any]:
         stage_start = time.time()
         self.logger.info("▶ POST")
+        self._ensure_post_env()
         align_result = self.align_info or self.stage_align()
         segments_for_clean = align_result["segments"]
         audio_path = self.ensure_audio_ready()
@@ -398,6 +467,7 @@ class PipelineRunner:
     def stage_export(self) -> Dict[str, Path]:
         stage_start = time.time()
         self.logger.info("▶ EXPORT")
+        self._ensure_post_env()
         post_info = self.post_info or self._load_post_from_disk()
         align_info = self.align_info or self._load_align_from_disk()
         with stage_timer(self.logger, "Exports finaux"):
@@ -408,6 +478,7 @@ class PipelineRunner:
                 structure=post_info["structure"],
                 aligned_path=align_info["path"],
                 formats=self.export_formats,
+                parallel=self.export_parallel,
             )
         for fmt, path in artifacts.items():
             self.logger.info("  %s -> %s", fmt.upper(), path)
@@ -469,6 +540,7 @@ class PipelineRunner:
             self.out_dir / f"{stem}.json",
             self.out_dir / f"{stem}.vtt",
             self.out_dir / f"{stem}.low_confidence.csv",
+            self.out_dir / f"{stem}.chapters.json",
         }
         for path in expected_exports:
             if not path.exists():
