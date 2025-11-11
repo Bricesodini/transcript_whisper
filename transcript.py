@@ -169,7 +169,7 @@ def main():
         sys.exit(1)
 
     name = video.stem
-    outdir = video.parent / f"SRT - {name}"
+    outdir = video.parent / f"Transcript - {name}"
     outdir.mkdir(parents=True, exist_ok=True)
     log_path = outdir / f"{name}.log"
 

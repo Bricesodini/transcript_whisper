@@ -1,6 +1,6 @@
 # Transcribe Suite
 
-> **Transcription locale de haute qualité**, optimisée Apple Silicon (MLX), avec **diarisation multi-locuteurs**, **alignement mot-à-mot**, **chapitrage intelligent** et **exports prêts pour RAG / montage**.  
+> **Transcription locale de haute qualité**, compatible Apple Silicon (CPU, sans accélération GPU), avec **diarisation multi-locuteurs**, **alignement mot-à-mot**, **chapitrage intelligent** et **exports prêts pour RAG / montage**.  
 > Une pipeline complète, **offline**, pensée pour produire un texte **lisible, structuré et exploitable** – pas seulement des sous-titres.
 
 ---
@@ -44,7 +44,7 @@ bin/env_check.sh
 | **Lecture fluide** (polish typographique) | ✅               | ❌          | partiel       | ✅                         |
 | **Exports RAG-ready** (JSON structuré)    | ✅               | ❌          | ❌            | partiel                    |
 | **Local / offline**                       | ✅               | ✅          | ✅            | ❌                         |
-| Apple Silicon / MLX                       | ✅ optimisé      | partiel     | ✅            | N/A                        |
+| Apple Silicon (CPU)                       | ✅ supporté      | partiel     | ✅            | N/A                        |
 
 **En bref** : au lieu d’un texte brut, vous obtenez un **document de travail** (chapitres, résumés, citations, timecodes) utilisable **immédiatement** pour analyse, synthèse, écriture, ou montage.
 
@@ -56,7 +56,7 @@ bin/env_check.sh
 
 - **preproc** : normalisation `ffmpeg` (mono, 16 kHz, loudnorm, débruitage léger, VAD court)
 - **segment** : découpes glissantes `75s` + overlap `8s`, manifest + state JSON pour reprise
-- **asr-parallel** : Faster-Whisper large-v3 (MLX) sur N workers (≤10) via queue, JSONL par segment
+- **asr-parallel** : Faster-Whisper large-v3 (mode auto CPU, sans GPU Metal) sur N workers (≤10) via queue, JSONL par segment
 - **merge** : fusion déterministe des overlaps (Levenshtein + logprob) → `02_merged_raw.json`
 - **diarize** : Pyannote (RTTM export)
 - **align** : WhisperX (word-level timestamps) sur l'audio complet `audio_16k.wav`
@@ -79,6 +79,9 @@ Switches utiles (QA / diarisation)
 - `--diarization-max-speakers`, `--diarization-min-speaker-turn` → overrides fins
 - `--low-confidence-threshold 0.35` / `--low-confidence-out chemin.csv` → QA confiance ciblée
 - `--chapters-min-duration 150` → découpe soft même sans grandes pauses
+- `--align-workers`, `--align-batch`, `--speech-only` → pilotent WhisperX (num_workers, batch, filtres speech)
+- `--seg-batch`, `--emb-batch`, `--num-speakers`, `--speech-mask`, `--diar-device` → contrôlent Pyannote
+- `--export-parallel` / `--export-serial` → exports en multi-threads ou séquentiels
 
 ## 🗂️ Arborescence de travail
 
@@ -114,7 +117,7 @@ La **reprise** est automatique : si un fichier JSONL existe ou qu'un segment est
 - macOS + `ffmpeg` (`brew install ffmpeg`)
 - ffmpeg 6.x–8.x (Homebrew) + ffprobe (même plage)
 - Python 3.9+
-- Apple Silicon recommandé (MLX)
+- Apple Silicon recommandé (CPU performant, sans dépendance GPU)
 - Token Hugging Face (pyannote) → `export PYANNOTE_TOKEN="hf_xxx"`
 
 **Bootstrap**
@@ -134,7 +137,7 @@ pip install --upgrade pip
 pip install -r requirements.lock
 ```
 
-> Les versions sont figées dans `requirements.lock` pour garantir la reproductibilité (mêmes wheels MLX/ctranslate2/pyannote). Préfère toujours ce lock avant un run critique.
+> Les versions sont figées dans `requirements.lock` pour garantir la reproductibilité (mêmes wheels ctranslate2/pyannote). Préfère toujours ce lock avant un run critique.
 
 **Vérification environnement (`bin/env_check.sh`)**
 
@@ -146,10 +149,10 @@ bin/env_check.sh
 - vérifie `python`, `pip`, `ffmpeg`, `ctranslate2`, `faster-whisper`, `pyannote.audio`, `whisperx`.
 - tolère un warning `torchaudio` sur Apple Silicon (Homebrew ne shippe pas les wheels Metal) : il est ignoré car la pipeline n'importe pas torchaudio, seules les bindings `soundfile` / `ffmpeg` sont utilisés.
 
-> **Accélération Metal (optionnelle)**  
+> **Accélération Metal (expérimentale et optionnelle)**  
 > `brew install ctranslate2` puis :  
 > `pip install --no-binary faster-whisper faster-whisper`  
-> Sans ctranslate2 Metal, Faster-Whisper bascule automatiquement sur CPU (voir logs). Les versions exactes sont loguées dans `run_manifest.json`.
+> Non packagé par défaut : privilégie la voie CPU si tu ne veux pas depanner Metal. Sans ctranslate2 Metal, Faster-Whisper bascule automatiquement sur CPU (voir logs). Les versions exactes sont loguées dans `run_manifest.json`.
 
 ---
 
@@ -208,6 +211,125 @@ bin/run.sh asr --input "/chemin/vers/podcast.mp4" --only-failed
 
 ---
 
+## ⚡ Optimisations ASR (CPU/Faster-Whisper)
+
+**1. Threads & BLAS**
+
+Avant un run `bin/run.sh asr|run`, fixe les threads pour éviter les combats BLAS :
+
+```bash
+export ASR_THREADS=$(python - <<'PY'
+import os; print(max(8, (os.cpu_count() or 8) - 2))
+PY
+)
+export OMP_NUM_THREADS=$ASR_THREADS
+export OPENBLAS_NUM_THREADS=$ASR_THREADS
+export VECLIB_MAXIMUM_THREADS=$ASR_THREADS
+export NUMEXPR_NUM_THREADS=$ASR_THREADS
+export CTRANSLATE2_NUM_THREADS=$ASR_THREADS
+
+# équivalent :
+source transcribe-suite/bin/asr_env.sh
+```
+
+**2. Paramètres Faster-Whisper recommandés (CPU “rapide mais stable”)**
+
+| Paramètre                       | Valeur conseillée                                       |
+| --------------------------------| ------------------------------------------------------- |
+| `compute_type`                  | `int8` (CPU Apple Silicon)                              |
+| `beam_size`, `best_of`          | `1` (ou `beam_size=2` si qualité++ et CPU dispo)        |
+| `temperature`                   | `0.0` + fallback interne                               |
+| `vad_filter`                    | `true`                                                  |
+| `chunk_length_s`                | `20` (15–30 selon médias très longs)                    |
+| `condition_on_previous_text`    | `false` (évite les dérives longues)                     |
+| `num_workers`                   | `min(8, ASR_THREADS)`                                   |
+| `task`                          | `transcribe`                                            |
+| `language`                      | Forcer `fr` si connu (épargne l’auto-detect coûteuse)   |
+
+Dans `config/config.yaml` tu peux refléter ces réglages (section `asr`).  
+En CLI :
+
+```bash
+NO_TK=1 ASR_THREADS=10 bin/run.sh run \
+  --input "/chemin/audio.wav" \
+  --lang fr \
+  --profile stable \
+  --export md,json,vtt \
+  --force
+```
+
+Le runner utilisera alors `ASR_THREADS` pour `CTRANSLATE2_NUM_THREADS` et les bindings Faster-Whisper respectent `num_workers`.
+
+---
+
+## ⚡ Optimisations post-ASR (Align / Diar / Export)
+
+**1. Threads dédiés (ALIGN / DIAR / EXPORT)**
+
+```bash
+export POST_THREADS=$(python - <<'PY'
+import os; print(max(6, (os.cpu_count() or 8)-1))
+PY
+)
+export OMP_NUM_THREADS=$POST_THREADS
+export OPENBLAS_NUM_THREADS=$POST_THREADS
+export VECLIB_MAXIMUM_THREADS=$POST_THREADS
+export NUMEXPR_NUM_THREADS=$POST_THREADS
+
+# équivalent :
+source transcribe-suite/bin/post_env.sh
+```
+
+Le runner bascule automatiquement sur ce preset avant `align`, `diarize`, `post`, `export` et applique `torch.set_num_threads`.
+
+**2. ALIGN WhisperX**
+
+```bash
+bin/run.sh align \
+  --align-workers 4 \
+  --align-batch 16 \
+  --speech-only
+```
+
+- `--align-workers` ajuste `num_workers` transmis à WhisperX (auto-fallback si non supporté).
+- `--align-batch` contrôle `batch_size` (15–32 recommandé).
+- `--speech-only` n’aligne que les segments recouverts par la diarisation (skip silence).
+
+**3. DIAR Pyannote**
+
+```bash
+bin/run.sh diarize \
+  --diar-device cpu \
+  --seg-batch 12 \
+  --emb-batch 12 \
+  --num-speakers 2 \
+  --speech-mask
+```
+
+- `--diar-device` force CPU/MPS/CUDA.
+- `--seg-batch` / `--emb-batch` reconfigurent les batchs internes.
+- `--num-speakers` renseigne le clustering (accélère la stabilisation).
+- `--speech-mask` restreint les segments finals aux zones “speech” (basées sur les merged JSON).
+
+**4. EXPORTS en parallèle**
+
+```bash
+bin/run.sh export --export-parallel --export md,json,vtt,jsonl
+```
+
+- Chaque format est écrit dans un thread séparé (`POST_THREADS` plafonne le pool).
+- `jsonl` produit un flux segment-par-segment (utilisable pour pipeline RAG).
+- `--export-parallel/--export-serial` disponibles sur toutes les commandes.
+
+Checklist rapide :
+
+1. ASR ➜ `source bin/asr_env.sh`, `--compute-type int8`, `--chunk-length 20`, `--asr-workers 8`.
+2. ALIGN ➜ `source bin/post_env.sh`, `--align-workers 4`, `--align-batch 16`, `--speech-only`.
+3. DIAR ➜ `--diar-device cpu`, `--seg-batch 12`, `--emb-batch 12`, `--num-speakers 2`, `--speech-mask`.
+4. EXPORT ➜ `--export-parallel`, `--export md,json,vtt,jsonl`.
+
+---
+
 ## ⚙️ Configuration
 
 Fichier : `config/config.yaml`. Extrait :
@@ -239,8 +361,8 @@ segmenter:
   manifest_name: manifest.csv
 
 asr:
-  device: auto           # auto | metal | cpu
-  compute_type: auto     # MLX ➜ auto
+  device: auto           # auto | metal | cpu (Metal non packagé par défaut)
+  compute_type: auto     # ajuste automatiquement (CPU Apple Silicon par défaut)
   batch_size: 24
   beam_size: 1
   best_of: 1
@@ -358,6 +480,7 @@ pytest
 | `.clean_txt` | Variante linéaire sans “Citations clés” (diffusion brute) |
 | `.txt`  | Lecture fluide (voix-off/podcast)               |
 | `.json` | RAG-ready (sections → citations → timecodes)    |
+| `.jsonl` | Flux segment-par-segment (RAG / ingestion streaming) |
 | `.srt`  | Sous-titres broadcast (Resolve/Premiere)        |
 | `.vtt`  | Sous-titres web (FCP/Resolve)                   |
 | `.low_confidence.csv` | Audit QA (mot, timecode, score < seuil) |
@@ -392,7 +515,7 @@ Tous les fichiers sont écrits en **UTF-8** (sans BOM) avec fins de ligne **Unix
 ## ❓ FAQ
 
 **Q : Faut-il un GPU Nvidia ?**  
-Non. Apple Silicon est supporté (MPS/Metal via ctranslate2). Sinon CPU.
+Non. Toute la pipeline tourne sur CPU (Apple Silicon ou Intel), sans dépendance GPU Metal/Nvidia.
 
 **Q : Pourquoi du local ?**  
 Contrôle, confidentialité, reproductibilité. Et un texte **structuré** prêt à penser/travailler.
