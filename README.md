@@ -20,7 +20,7 @@ source .venv/bin/activate
 bin/env_check.sh
 ```
 
-**Sorties** dans `transcribe-suite/exports/` :
+**Sorties** dans un dossier `TRANSCRIPT - <NomDuFichier>` créé à côté du média :
 
 - `.md` (sections/titres/résumés, Obsidian-ready)
 - `.txt` (lecture fluide)
@@ -28,6 +28,11 @@ bin/env_check.sh
 - `.chapters.json` (chapitrage autonome)
 - `.srt` / `.vtt` (sous-titres broadcast / web)
 - `.low_confidence.csv` (audit mots < seuil de confiance)
+- `.clean.jsonl` / `.clean.txt` (texte human vs machine, prêt pour RAG/finetune)
+- `.chunks.jsonl` + `.chunks.meta.json` (blocs 200–400 tokens avec overlap contrôlé)
+- `.quotes.jsonl` (extractions liées aux sections/chunks)
+- `.low_confidence.jsonl` (file d'attente pour relecture ciblée)
+- `.metrics.json` (tableau machine-readable pour log/graphes)
 
 👉 Référence complète du mode stable : `docs/STABLE_BASE.md` (versions, flags autorisés, procédures de reprise).
 
@@ -65,23 +70,156 @@ bin/env_check.sh
 - **structure** : chapitrage heuristique, citations, résumés → export `.chapters.json`
 - **export** : `.txt`, `.md`, `.json`, `.srt`, `.vtt` (UTF-8) + copie presse-papiers
 
-**Commandes CLI disponibles** (`bin/run.sh <commande> --input …`, idempotentes, `--force` pour rejouer) :
+### Modes & reprises
 
-- `run` (défaut) : pipeline complet
-- `prepare` : `audio_16k.wav` + segments + manifest/state
-- `asr`, `merge`, `align`, `post`, `export` : étapes unitaires
-- `resume` : relance complète en s'appuyant sur les artefacts existants
-- `dry-run` : imprime l’arborescence cible + paramètres sans lancer de traitement lourd
+```bash
+bin/run.sh --input "media.mp4" --config configs/base_stable.yaml         # run complet
+bin/run.sh post --input "media.mp4" --config ... --only=chunk,audit      # rejoue uniquement certaines étapes post
+bin/run.sh resume --input "media.mp4" --config ...                       # relance clean→export sans repasser par ASR/align
+bin/run.sh --input "media.mp4" ... --dry-run                             # s'arrête après l'audit (utiliser --no-audit si besoin)
+```
 
-Switches utiles (QA / diarisation)
+Options clés :
 
-- `--diarization-monologue` → force `max_speakers=1`, `min_speaker_turn=1.3`
-- `--diarization-max-speakers`, `--diarization-min-speaker-turn` → overrides fins
-- `--low-confidence-threshold 0.35` / `--low-confidence-out chemin.csv` → QA confiance ciblée
-- `--chapters-min-duration 150` → découpe soft même sans grandes pauses
-- `--align-workers`, `--align-batch`, `--speech-only` → pilotent WhisperX (num_workers, batch, filtres speech)
-- `--seg-batch`, `--emb-batch`, `--num-speakers`, `--speech-mask`, `--diar-device` → contrôlent Pyannote
-- `--export-parallel` / `--export-serial` → exports en multi-threads ou séquentiels
+| Flag | Effet |
+| --- | --- |
+| `--log-level {debug,info,warning,error}` | Ajuste la verbosité console (les fichiers restent en DEBUG). |
+| `--only=clean,chunk` | Force uniquement certaines sous-étapes lors d'un `post`/`resume`. |
+| `--dry-run` | Exécute toutes les étapes nécessaires (incluant audit/metrics) mais saute les exports finaux. |
+| `--no-audit` | Désactive l'écriture de `*.audit.md` (utile pour les runs batch). |
+
+### Étapes suggérées & points de contrôle
+
+**Pré-run recommandé**
+
+- `source .venv/bin/activate` puis `bin/env_check.sh` pour valider Python, ffmpeg et wheels pin.
+- `export PYANNOTE_TOKEN="hf_xxx"` (et presets `ASR_THREADS` / `POST_THREADS` si nécessaires).
+- `bin/run.sh dry-run --input "...mp4"` pour vérifier l’arborescence cible, les exports et l’état des artefacts existants.
+
+**Déroulé stage par stage**
+
+1. **Prétraitement & segmentation (`prepare`)**  
+   Commande : `bin/run.sh prepare --input "...mp4"`  
+   Artefacts : `work/<media>/audio_16k.wav`, `00_segments/*.wav`, `manifest.csv`, `manifest_state.json`.  
+   Contrôle : `manifest_state.json` affiche `PENDING/DONE/FAILED` pour chaque segment ; relancez avec `--force` pour régénérer.
+
+2. **ASR parallèle (`asr`)**  
+   Commande : `bin/run.sh asr --input "...mp4"` (ou incluse dans `run`).  
+   Artefacts : `01_asr_jsonl/seg_*.jsonl`, `logs/asr_worker_*.log`, métriques dans `logs/metrics.json`.  
+   Contrôle : surveillez les `failed_segments` remontés dans les logs ; `resume --only-failed` rejoue uniquement ceux en erreur.
+
+3. **Fusion déterministe (`merge`)**  
+   Commande : `bin/run.sh merge --input "...mp4"` lorsque vous souhaitez recalculer `02_merged_raw.json` sans relancer l’ASR.  
+   Artefacts : `02_merged_raw.json`, `logs/merge.log`.  
+   Contrôle : vérifier que le champ `language` concorde avec `--lang`/détection automatique et que le compteur de segments correspond au manifest.
+
+4. **Diarisation Pyannote (`stage_diarization`)**  
+   Déclenchée automatiquement par `bin/run.sh align`/`run`.  
+   Artefacts : `diarization.rttm`, `cache/pyannote_*`, éventuel masque `speech_segments.json`.  
+   Contrôle : adapter `--mode`, `--num-speakers`, `--diarization-*` en fonction des logs si la séparation des voix est insuffisante.
+
+5. **Alignement WhisperX (`align`)**  
+   Commande : `bin/run.sh align --input "...mp4"` (inclut la diarisation si nécessaire).  
+   Artefacts : `03_aligned_whisperx.json`, `logs/align.log`, audio préparé `audio_16k.wav`.  
+   Contrôle : ajuster `--align-workers`, `--align-batch`, `--speech-only` en fonction du temps d’exécution et des warnings WhisperX.
+
+6. **Post-traitement éditorial (`post`)**  
+   Commande : `bin/run.sh post --input "...mp4"` pour rejouer `refine → clean → polish → structure`.  
+   Artefacts : `refine/`, `04_cleaned.json`, `05_polished.json`, `structure.json`, `logs/post.log`.  
+   Contrôle : `refine` ne tourne que si des segments sous le seuil `--low-confidence-threshold` sont détectés ; modifiez le seuil ou forcez avec `--force`.
+
+7. **Exports finaux (`export`)**  
+   Commande : `bin/run.sh export --input "...mp4" --export txt,md,...`.  
+   Artefacts : dossier `TRANSCRIPT - <media>/` (formats demandés, `.chapters.json`, `.low_confidence.csv`).  
+   Contrôle : en mode strict, `_verify_artifacts` confirme la présence exacte de `.md/.json/.vtt`; `run_manifest.json` (dans `work/.../logs`) récapitule hash, durées, versions.
+
+---
+
+## 🧭 Référence CLI centralisée
+
+### Structure de base
+
+- `bin/run.sh <commande> --input "/chemin/vers/media.ext" [options]`
+- `bin/run.sh` injecte automatiquement `--config config/config.yaml`. Si vous appelez `src/pipeline.py` directement, ajoutez `--config`.
+- Le token pyannote (`PYANNOTE_TOKEN`) et les presets thread (`ASR_THREADS`, `POST_THREADS`) doivent être exportés avant l’appel si nécessaires.
+
+```bash
+bin/run.sh run \
+  --input "/Volumes/Interviews/talkshow.mp4" \
+  --lang auto \
+  --profile talkshow \
+  --export txt,md,json,srt,vtt
+```
+
+### Commandes disponibles
+
+| Commande | Ce qui est exécuté | Quand l’utiliser |
+| -------- | ------------------ | ---------------- |
+| `run` (défaut) | Chaîne complète `preproc → export`. | Traitement standard d’un média. |
+| `prepare` | Prétraitement + segmentation + manifest/state. | Préparer en amont ou diagnostiquer un input douteux. |
+| `asr` | Uniquement Faster-Whisper sur les segments générés. | Rejouer l’ASR après un réglage compute/offline. |
+| `merge` | Fusion des JSONL ASR + génération `02_merged_raw.json`. | Corriger un merge ou inspecter des overlaps. |
+| `align` | Alignement WhisperX mot-à-mot (audio complet). | Refaire l’alignement après tweaking threads/batch. |
+| `post` | `clean → polish → structure`. | Travailler la qualité éditoriale sans relancer l’ASR. |
+| `export` | Génération des formats finaux depuis les artefacts post. | Recréer des exports (formats supplémentaires, patch). |
+| `resume` | Pipeline complet mais en reprenant tout artefact déjà `DONE`. | Après crash / coupure ; combine avec `--only-failed`. |
+| `dry-run` | Aucun traitement : affiche l’arborescence cible + paramètres résolus. | Vérifier les chemins/exports avant un run lourd. |
+
+### Arguments essentiels
+
+| Option | Rôle | Notes / exemples |
+| ------ | ---- | ---------------- |
+| `command` | Choix de la commande ci-dessus (`run` par défaut). | `bin/run.sh align --input ...` |
+| `--input` (obligatoire) | Média audio/vidéo à transcrire. | Accepte `~/`, chemins relatifs ou un fichier déjà déposé dans `inputs/`. |
+| `--lang` | Force la langue ASR (`fr`, `en`, `auto`). | Détecte automatiquement sinon ; forcer `fr` accélère l’ASR. |
+| `--profile` | Charge un profil YAML (`default`, `talkshow`, `conference`, custom). | Permet d’appliquer des presets exports/chapitrage. |
+| `--export` | Liste CSV des formats (`txt,md,json,srt,vtt`). | En mode strict seuls `md,json,vtt` sont autorisés. |
+| `--initial-prompt` | Injecte un prompt au démarrage de l’ASR. | Utile pour donner des listes de noms propres. |
+| `--mode` | `mono` ou `multi` influence la diarisation par défaut. | `multi` ouvre plus le nombre de locuteurs + `speech-mask`. |
+| `--skip-diarization` | Court-circuite Pyannote et les étapes dépendantes. | Pour mesurer uniquement l’ASR ou en cas d’absence de token. |
+
+### Contrôle d’exécution & sécurité
+
+| Option | Ce que ça fait | Usage recommandé |
+| ------ | -------------- | ---------------- |
+| `--force` | Rejoue une commande même si les artefacts existent. | À utiliser après une modification de config/poids. |
+| `--only-failed` | Combine avec `resume`/`asr` pour ne rejouer que les segments `FAILED`. | Gagnez du temps après un incident ponctuel. |
+| `--strict` / `--no-strict` | Active (défaut) ou désactive la conformité « stable base ». | Gardez `--strict` pour des livrables figés. |
+| `--fail-fast` / `--no-fail-fast` | Stop immédiat au premier segment en échec (défaut : on stop). | Passez en `--no-fail-fast` en phase d’exploration. |
+| `--no-partial-export` / `--allow-partial-export` | Empêche (défaut) ou autorise les exports si une étape échoue. | Autorisez ponctuellement pour du debug rapide. |
+| `--keep-build` | Conserve `work/<media>` après succès. | Analyse post-mortem ou réutilisation d’artefacts. |
+| `--verbose` | Active les logs DEBUG dans la console + fichiers. | Debug fin, vérification de tokens, etc. |
+
+### Qualité, diarisation & QA
+
+| Option | Description | Exemple d’utilisation |
+| ------ | ----------- | --------------------- |
+| `--diarization-max-speakers` | Override du `max_speakers` Pyannote. | `--diarization-max-speakers 4` pour une table ronde. |
+| `--diarization-min-speaker-turn` | Durée mini (s) entre deux tours pour lisser la diarisation. | `--diarization-min-speaker-turn 1.2` pour éviter le zapping. |
+| `--diarization-monologue` | Raccourci `max_speakers=1`, `min_turn=1.3`. | Dictées, cours magistraux. |
+| `--num-speakers` | Hint direct du nombre de voix attendues (Pyannote). | `--num-speakers 2` si vous connaissez la scène. |
+| `--speech-mask` / `--no-speech-mask` | Applique (défaut profil multi) un masque speech aux étapes post-ASR. | `--speech-mask` pour ignorer le bruit hors diarisation. |
+| `--speech-only` / `--no-speech-only` | Limite ou non l’alignement WhisperX aux segments speech. | `--speech-only` accélère l’alignement sur longs silences. |
+| `--low-confidence-threshold` | Seuil de confiance pour marquer les mots suspects. | `--low-confidence-threshold 0.35`. |
+| `--low-confidence-out` | Chemin CSV pour exporter ces mots. | `--low-confidence-out audit.csv`. |
+| `--chapters-min-duration` | Durée soft minimale d’un chapitre (s). | `--chapters-min-duration 150` pour forcer des blocs courts. |
+
+### Performance & ressources
+
+| Option | Description | Exemple |
+| ------ | ----------- | ------- |
+| `--asr-workers` | Nombre maximal de workers Faster-Whisper parallèles (<= segments). | `--asr-workers 6` couplé à `ASR_THREADS`. |
+| `--compute-type` | Force `int8`, `float16`, `auto` pour Faster-Whisper. | `--compute-type int8` recommandé sur Apple Silicon. |
+| `--chunk-length` | Durée (s) des morceaux traités par Faster-Whisper. | `--chunk-length 20` pour long média stable. |
+| `--vad` / `--no-vad` | Active/désactive le VAD interne Faster-Whisper. | `--vad` pour couper le bruit d’ambiance permanent. |
+| `--condition-off` | Désactive `condition_on_previous_text`. | Évite les dérives sur podcasts très longs. |
+| `--align-workers` | `num_workers` WhisperX. | `--align-workers 4` si beaucoup de cœurs. |
+| `--align-batch` | `batch_size` WhisperX. | `--align-batch 24` sur M3 Max. |
+| `--diar-device` | Choix du device Pyannote (`cpu`, `cuda`, `mps`). | `--diar-device cpu` (défaut) ; `mps` possible si torch Metal. |
+| `--seg-batch` / `--emb-batch` | Batch sizes segmentation/embeddings Pyannote. | `--seg-batch 12 --emb-batch 12` pour CPU rapides. |
+| `--export-parallel` / `--export-serial` | Détermine si les exports tournent en multi-thread (défaut config). | `--export-serial` si disque lent / collisions I/O. |
+
+> Astuce : `bin/run.sh dry-run ... --verbose` récapitule tous les paramètres effectifs (profil + overrides) avant d’allumer les modèles. Servez-vous-en pour documenter une recette partagée.
 
 ## 🗂️ Arborescence de travail
 
@@ -100,11 +238,16 @@ transcribe-suite/
 │  ├─ structure.json
 │  ├─ logs/ (run.log, asr_worker_*.log, merge.log, align.log, metrics.json)
 │  └─ cache/, refine/, diarization.rttm…
-└─ exports/VIDEO/
+
+media_parent/
+├─ VIDEO.ext
+└─ TRANSCRIPT - VIDEO/
    ├─ VIDEO.txt / .md / .json / .srt / .vtt
    ├─ VIDEO.chapters.json
    └─ VIDEO.low_confidence.csv
 ```
+
+Toutes les sorties finales sont donc adjacentes au média traité, dans un dossier `TRANSCRIPT - <Nom>`, ce qui évite les duplications dans `transcribe-suite/exports`.
 
 La **reprise** est automatique : si un fichier JSONL existe ou qu'un segment est marqué `DONE` dans `manifest_state.json`, il est sauté. Chaque worker écrit ses logs (avec PID) pour faciliter le debug.
 
@@ -166,6 +309,8 @@ bin/env_check.sh
 ---
 
 ## 🖥️ Utilisation (CLI / Shortcuts / Drag-Drop)
+
+Référence détaillée des commandes/arguments : voir la section **🧭 Référence CLI centralisée** ci-dessus.
 
 **CLI**
 

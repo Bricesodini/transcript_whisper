@@ -1,19 +1,23 @@
 import argparse
 import datetime as dt
 import hashlib
+import json
 import logging
 import platform
 import subprocess
 import time
 from importlib import metadata
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
+from audit import AuditReporter
 from align import Aligner
 from asr import ASRProcessor
 from clean import Cleaner
+from chunker import Chunker
 from diarize import Diarizer
 from export import Exporter
+from glossary import GlossaryManager
 from merger import DeterministicMerger
 from polish import Polisher
 from preproc import Preprocessor
@@ -30,11 +34,13 @@ from utils import (
     read_json,
     select_profile,
     setup_logger,
+    stable_id,
     stage_timer,
     write_json,
 )
 
 COMMANDS = ("run", "prepare", "asr", "merge", "align", "post", "export", "resume", "dry-run")
+SCHEMA_VERSION = "1.0.0"
 
 
 def parse_args():
@@ -55,7 +61,8 @@ def parse_args():
     parser.add_argument("--initial-prompt", default=None, help="Prompt initial pour l'ASR")
     parser.add_argument("--skip-diarization", action="store_true", help="Désactive Pyannote (debug/seulement ASR)")
     parser.add_argument("--keep-build", action="store_true", help="Ne pas supprimer les artefacts temporaires")
-    parser.add_argument("--verbose", action="store_true", help="Afficher les logs détaillés")
+    parser.add_argument("--verbose", action="store_true", help="Afficher les logs détaillés (équivalent --log-level debug)")
+    parser.add_argument("--log-level", choices=["debug", "info", "warning", "error"], default="info", help="Niveau de log console")
     parser.add_argument("--force", action="store_true", help="Rejouer la commande même si les artefacts existent")
     parser.add_argument("--strict", dest="strict", action="store_true", help="Active le mode strict")
     parser.add_argument("--no-strict", dest="strict", action="store_false", help="Désactive le mode strict")
@@ -89,6 +96,9 @@ def parse_args():
     parser.add_argument("--no-speech-mask", dest="speech_mask", action="store_false", help="Désactive le masque speech")
     parser.add_argument("--export-parallel", dest="export_parallel", action="store_true", help="Exports finaux en parallèle")
     parser.add_argument("--export-serial", dest="export_parallel", action="store_false", help="Exports finaux en série")
+    parser.add_argument("--dry-run", action="store_true", help="Exécute les étapes jusqu'à l'audit sans exporter")
+    parser.add_argument("--no-audit", action="store_true", help="Désactive la génération de l'audit")
+    parser.add_argument("--only", help="Liste d'étapes à exécuter (clean,polish,structure,chunk,audit,export)")
     parser.set_defaults(vad_filter=None)
     parser.set_defaults(speech_only=None, speech_mask=None, export_parallel=None)
     args = parser.parse_args()
@@ -122,6 +132,10 @@ class PipelineRunner:
         self.no_partial_export = bool(args.no_partial_export)
         self.only_failed = bool(args.only_failed)
         self.command = args.command or "run"
+        self.log_level = "debug" if args.verbose else (args.log_level or "info")
+        self.dry_run = bool(args.dry_run)
+        self.no_audit = bool(args.no_audit)
+        self.only_stages = self._parse_only(args.only)
         self.allowed_exports = {"md", "json", "vtt"}
         self._apply_overrides(args)
         if self.strict:
@@ -138,15 +152,15 @@ class PipelineRunner:
         self.manifest_path = self.work_dir / manifest_name
         self.state_path = self.work_dir / "manifest_state.json"
 
-        exports_root = self.paths.get("exports_dir", self.paths.get("out_dir"))
-        self.out_dir = Path(exports_root) / self.media_path.stem
+        transcript_dir = f"TRANSCRIPT - {self.media_path.stem}"
+        self.out_dir = self.media_path.parent / transcript_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
         self.global_log_dir = self.paths.get("logs_dir", self.work_dir / "logs")
         self.global_log_dir.mkdir(parents=True, exist_ok=True)
         self.local_log_dir = self.work_dir / "logs"
         run_name = f"{self.media_path.stem}_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        self.logger = setup_logger(self.global_log_dir, run_name, verbose=args.verbose)
+        self.logger = setup_logger(self.global_log_dir, run_name, log_level=self.log_level)
         local_log_path = self.local_log_dir / f"{run_name}.log"
         if self.global_log_dir.resolve() != self.local_log_dir.resolve():
             local_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,19 +194,44 @@ class PipelineRunner:
         self._models_prewarmed = False
         self.post_threads = compute_post_threads()
         self._post_env_applied = False
+        self.outputs_cfg = config.get("outputs", {})
+        self.numbers_cfg = config.get("numbers", {})
+        self.typography_cfg = config.get("typography", {})
+        self.post_state_path = self.work_dir / "post_state.json"
+        self.post_state = self._load_post_state()
+        self.config_signature = {
+            "outputs": self.outputs_cfg,
+            "numbers": self.numbers_cfg,
+            "typography": self.typography_cfg,
+        }
+        self.config_hash = self._hash_dict(self.config_signature)
+        self.config_changed = self.post_state.get("config_hash") != self.config_hash
 
         config = self.config
         self.preproc = Preprocessor(config, self.logger)
         self.segmenter = Segmenter(config, self.logger)
         self.asr = ASRProcessor(config, self.logger)
         self.merger = DeterministicMerger(config, self.logger)
-        self.cleaner = Cleaner(config, self.logger)
-        self.polisher = Polisher(config.get("polish", {}), self.logger)
+        self.glossary = GlossaryManager(config.get("glossary", {}), self.logger, config_root=self.config_path.parent)
+        self.cleaner = Cleaner(config, self.logger, glossary=self.glossary)
+        self.polisher = Polisher(
+            config.get("polish", {}),
+            self.logger,
+            glossary=self.glossary,
+            numbers_cfg=config.get("numbers", {}),
+            typography_cfg=config.get("typography", {}),
+        )
         self.structurer = Structurer(config, self.logger)
+        self.chunker = Chunker(config.get("chunking", {}), self.logger)
+        self.audit = AuditReporter(config.get("audit", {}), self.logger)
         self.exporter = Exporter(config, self.logger)
         self.aligner = Aligner(config, self.logger)
         self.diarizer = None if self.skip_diarization else Diarizer(config, self.logger)
         self.refiner = SegmentRefiner(config, self.logger, self.asr)
+        confidence_cfg = config.get("cleaning", {}).get("confidence", {})
+        self.low_conf_threshold = float(confidence_cfg.get("sentence_threshold") or confidence_cfg.get("segment_threshold") or 0.55)
+        self.low_conf_p05_threshold = float(confidence_cfg.get("p05_threshold", self.low_conf_threshold - 0.1))
+        self.artifacts_info: Dict[str, Dict[str, Any]] = {}
 
         self.seg_info: Optional[Dict[str, Path]] = None
         self.asr_info: Optional[Dict[str, Any]] = None
@@ -206,6 +245,20 @@ class PipelineRunner:
         self.logger.info("Media: %s", self.media_path)
         self.logger.info("Langue demandée: %s", self.requested_lang)
         self.logger.info("Profil: %s", args.profile or config.get("defaults", {}).get("profile", "default"))
+
+    def _parse_only(self, raw: Optional[str]) -> Optional[List[str]]:
+        if not raw:
+            return None
+        allowed = {"clean", "polish", "structure", "chunk", "audit", "export"}
+        expanded: List[str] = []
+        for part in raw.split(","):
+            token = part.strip().lower()
+            if not token:
+                continue
+            if token not in allowed:
+                raise PipelineError(f"Stage inconnu pour --only: {token}")
+            expanded.append(token)
+        return expanded or None
 
     def _apply_overrides(self, args) -> None:
         config = self.config
@@ -432,35 +485,65 @@ class PipelineRunner:
         if self.refiner.enabled and segments_for_clean:
             with stage_timer(self.logger, "Re-ASR ciblé"):
                 segments_for_clean = self.refiner.run(audio_path, segments_for_clean, align_result["language"], self.work_dir)
-        with stage_timer(self.logger, "Nettoyage linguistique"):
-            cleaned_segments = self.cleaner.run(segments_for_clean, align_result["language"])
-            write_json(
-                self.work_dir / "04_cleaned.json",
-                {"language": align_result["language"], "segments": cleaned_segments},
+        language = align_result["language"]
+        doc_id = self.media_path.stem
+
+        cleaned_segments, clean_report = self._ensure_clean_stage(segments_for_clean, language)
+        polished_segments, polish_report = self._ensure_polish_stage(cleaned_segments, language)
+        structure_data = self._ensure_structure_stage(polished_segments, language, doc_id)
+        chunks = self._ensure_chunk_stage(structure_data, language, doc_id)
+        self._annotate_sentences_with_chunks(structure_data, chunks)
+        sentences = self._flatten_sentences(structure_data)
+
+        clean_artifacts = self._write_clean_artifacts(sentences, doc_id, language)
+        chunk_artifacts = self._write_chunk_artifacts(structure_data, chunks, doc_id, language)
+        low_conf_entries = self._collect_low_conf_spans(structure_data, chunks, language)
+        low_conf_path = self._write_low_conf_jsonl(low_conf_entries, doc_id)
+        metrics_payload = self._build_quality_metrics(
+            sentences,
+            chunks,
+            clean_report,
+            polish_report,
+            low_conf_entries,
+            structure_data,
+        )
+        self._write_metrics_file(metrics_payload, clean_artifacts, chunk_artifacts, low_conf_path)
+
+        audit_path = None
+        low_conf_examples = low_conf_entries[: self.audit.max_examples] if low_conf_entries else []
+        if self.audit.enabled and not self.no_audit:
+            audit_text = self.audit.render(
+                media_name=doc_id,
+                language=language,
+                clean_report=clean_report,
+                polish_report=polish_report,
+                structure=structure_data,
+                chunks=chunks,
+                metrics=metrics_payload,
+                low_conf_entries=low_conf_examples,
+                low_conf_path=low_conf_path,
+                glossary_conflicts=self.glossary.conflicts_summary(),
             )
-        with stage_timer(self.logger, "Polish lecture"):
-            polished_segments = self.polisher.run(cleaned_segments, lang=align_result["language"])
-            write_json(
-                self.work_dir / "05_polished.json",
-                {"language": align_result["language"], "segments": polished_segments},
-            )
-        with stage_timer(self.logger, "Structuration et chapitrage"):
-            structure_data = self.structurer.run(polished_segments, align_result["language"])
-            write_json(self.work_dir / "structure.json", structure_data)
-            chapters_path = self.out_dir / f"{self.media_path.stem}.chapters.json"
-            write_json(
-                chapters_path,
-                {
-                    "language": align_result["language"],
-                    "sections": structure_data.get("sections", []),
-                },
-            )
-            self.logger.info("Chapitres ➜ %s", chapters_path)
+            audit_path = self.out_dir / f"{doc_id}.audit.md"
+            audit_path.write_text(audit_text, encoding="utf-8")
+            self.logger.info("Audit ➜ %s", audit_path)
+        elif self.no_audit:
+            self.logger.info("Audit désactivé (--no-audit)")
+
         self.post_info = {
             "cleaned": cleaned_segments,
             "polished": polished_segments,
             "structure": structure_data,
+            "chunks": chunks,
+            "clean_report": clean_report,
+            "polish_report": polish_report,
+            "metrics": metrics_payload,
+            "low_conf_path": low_conf_path,
+            "clean_artifacts": clean_artifacts,
+            "chunk_artifacts": chunk_artifacts,
+            "audit_path": audit_path,
         }
+        self._save_post_state()
         self._mark_stage_duration("post", stage_start)
         return self.post_info
 
@@ -490,15 +573,29 @@ class PipelineRunner:
         polished_path = self.work_dir / "05_polished.json"
         structure_path = self.work_dir / "structure.json"
         cleaned_path = self.work_dir / "04_cleaned.json"
+        chunks_cache = self.work_dir / "chunks.json"
         if not polished_path.exists() or not structure_path.exists() or not cleaned_path.exists():
             raise PipelineError("Post-traitement introuvable: lance d'abord la commande 'post'.")
-        polished_payload = read_json(polished_path)
-        structure_payload = read_json(structure_path)
-        cleaned_payload = read_json(cleaned_path)
+        polished_payload = self._ensure_schema_payload(read_json(polished_path), polished_path)
+        structure_payload = self._ensure_schema_payload(read_json(structure_path), structure_path)
+        cleaned_payload = self._ensure_schema_payload(read_json(cleaned_path), cleaned_path)
+        chunk_payload = (
+            self._ensure_schema_payload(read_json(chunks_cache), chunks_cache).get("chunks", [])
+            if chunks_cache.exists()
+            else []
+        )
+        metrics_path = self.out_dir / f"{self.media_path.stem}.metrics.json"
+        metrics_payload = read_json(metrics_path) if metrics_path.exists() else {}
+        low_conf_path = self.out_dir / f"{self.media_path.stem}.low_confidence.jsonl"
         self.post_info = {
             "cleaned": cleaned_payload.get("segments", []),
             "polished": polished_payload.get("segments", []),
             "structure": structure_payload,
+            "chunks": chunk_payload,
+            "clean_report": cleaned_payload.get("report", {}),
+            "polish_report": polished_payload.get("report", {}),
+            "metrics": metrics_payload,
+            "low_conf_path": low_conf_path if low_conf_path.exists() else None,
         }
         return self.post_info
 
@@ -513,6 +610,444 @@ class PipelineRunner:
             "path": aligned_path,
         }
         return self.align_info
+
+    def _should_run_post_stage(self, stage_name: str) -> bool:
+        if self.force:
+            return True
+        if self.only_stages:
+            return stage_name in self.only_stages
+        if self.command == "resume":
+            return self.config_changed
+        return True
+
+    def _ensure_clean_stage(self, segments: List[Dict[str, Any]], language: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        cache_path = self.work_dir / "04_cleaned.json"
+        input_hash = self._hash_segments(segments)
+        if not self.force and cache_path.exists():
+            payload = self._ensure_schema_payload(read_json(cache_path), cache_path)
+            meta = payload.get("meta", {})
+            if not self._should_run_post_stage("clean") and meta.get("input_hash") == input_hash:
+                return payload.get("segments", []), payload.get("report", {})
+        with stage_timer(self.logger, "Nettoyage linguistique"):
+            cleaned_segments = self.cleaner.run(segments, language)
+            report = self.cleaner.report()
+            payload = {
+                "schema_version": SCHEMA_VERSION,
+                "language": language,
+                "segments": cleaned_segments,
+                "report": report,
+                "meta": {"input_hash": input_hash},
+            }
+            write_json(cache_path, payload, indent=2)
+        return cleaned_segments, report
+
+    def _ensure_polish_stage(self, segments: List[Dict[str, Any]], language: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        cache_path = self.work_dir / "05_polished.json"
+        input_hash = self._hash_segments(segments)
+        if not self.force and cache_path.exists():
+            payload = self._ensure_schema_payload(read_json(cache_path), cache_path)
+            meta = payload.get("meta", {})
+            if not self._should_run_post_stage("polish") and meta.get("input_hash") == input_hash:
+                return payload.get("segments", []), payload.get("report", {})
+        with stage_timer(self.logger, "Polish lecture"):
+            polished_segments = self.polisher.run(segments, lang=language)
+            report = self.polisher.report()
+            payload = {
+                "schema_version": SCHEMA_VERSION,
+                "language": language,
+                "segments": polished_segments,
+                "report": report,
+                "meta": {"input_hash": input_hash},
+            }
+            write_json(cache_path, payload, indent=2)
+        return polished_segments, report
+
+    def _ensure_structure_stage(self, segments: List[Dict[str, Any]], language: str, doc_id: str) -> Dict[str, Any]:
+        cache_path = self.work_dir / "structure.json"
+        input_hash = self._hash_segments(segments)
+        if not self.force and cache_path.exists():
+            payload = self._ensure_schema_payload(read_json(cache_path), cache_path)
+            meta = payload.get("meta", {})
+            if not self._should_run_post_stage("structure") and meta.get("input_hash") == input_hash:
+                return payload
+        with stage_timer(self.logger, "Structuration et chapitrage"):
+            structure_data = self.structurer.run(segments, language, doc_id, self.low_conf_threshold)
+            payload = dict(structure_data)
+            payload["meta"] = {"input_hash": input_hash}
+            payload["schema_version"] = SCHEMA_VERSION
+            write_json(cache_path, payload, indent=2)
+            chapters_path = self.out_dir / f"{doc_id}.chapters.json"
+            write_json(
+                chapters_path,
+                {"schema_version": SCHEMA_VERSION, "language": language, "sections": structure_data.get("sections", [])},
+                indent=2,
+            )
+            self.logger.info("Chapitres ➜ %s", chapters_path)
+        return payload
+
+    def _ensure_chunk_stage(self, structure: Dict[str, Any], language: str, doc_id: str) -> List[Dict[str, Any]]:
+        cache_path = self.work_dir / "chunks.json"
+        if not self.chunker.enabled:
+            return []
+        structure_hash = hashlib.sha1(json.dumps(structure, sort_keys=True).encode("utf-8")).hexdigest()
+        if not self.force and cache_path.exists():
+            payload = self._ensure_schema_payload(read_json(cache_path), cache_path)
+            meta = payload.get("meta", {})
+            if not self._should_run_post_stage("chunk") and meta.get("input_hash") == structure_hash:
+                return payload.get("chunks", [])
+        with stage_timer(self.logger, "Chunking LLM"):
+            chunks = self.chunker.run(structure, language, doc_id)
+            write_json(
+                cache_path,
+                {"schema_version": SCHEMA_VERSION, "chunks": chunks, "meta": {"input_hash": structure_hash}},
+                indent=2,
+            )
+        return chunks
+
+    def _annotate_sentences_with_chunks(self, structure: Dict[str, Any], chunks: List[Dict[str, Any]]) -> None:
+        if not structure or not chunks:
+            return
+        lookup = [(chunk["id"], chunk["start"], chunk["end"]) for chunk in chunks]
+        for section in structure.get("sections", []):
+            for sentence in section.get("sentences", []):
+                chunk_id = self._chunk_id_for_timespan(lookup, sentence.get("start"), sentence.get("end"))
+                if chunk_id:
+                    sentence["chunk_id"] = chunk_id
+
+    def _chunk_id_for_timespan(self, lookup: List[Tuple[str, float, float]], start: float, end: float) -> Optional[str]:
+        for chunk_id, chunk_start, chunk_end in lookup:
+            if chunk_start - 0.1 <= (start or chunk_start) and (end or start) <= chunk_end + 0.1:
+                return chunk_id
+        return lookup[-1][0] if lookup else None
+
+    def _hash_segments(self, segments: List[Dict[str, Any]]) -> str:
+        canonical = []
+        for segment in segments or []:
+            canonical.append(
+                {
+                    "start": round(float(segment.get("start", 0.0) or 0.0), 3),
+                    "end": round(float(segment.get("end", segment.get("start", 0.0)) or 0.0), 3),
+                    "speaker": segment.get("speaker"),
+                    "text": segment.get("text") or segment.get("text_human") or "",
+                }
+            )
+        blob = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha1(blob).hexdigest()
+
+    def _hash_dict(self, payload: Dict[str, Any]) -> str:
+        blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha1(blob).hexdigest()
+
+    def _load_post_state(self) -> Dict[str, Any]:
+        if not self.post_state_path.exists():
+            return {}
+        try:
+            return read_json(self.post_state_path)
+        except Exception:
+            return {}
+
+    def _save_post_state(self) -> None:
+        payload = {
+            "config_hash": self.config_hash,
+            "updated_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        }
+        write_json(self.post_state_path, payload, indent=2)
+
+    def _ensure_schema_payload(self, payload: Dict[str, Any], path: Path) -> Dict[str, Any]:
+        version = payload.get("schema_version")
+        if version == SCHEMA_VERSION:
+            return payload
+        if version is None:
+            self.logger.warning("Schema absent pour %s → marquage en v%s", path.name, SCHEMA_VERSION)
+        else:
+            self.logger.warning("Schema v%s détecté pour %s → conversion v%s", version, path.name, SCHEMA_VERSION)
+        payload["schema_version"] = SCHEMA_VERSION
+        try:
+            write_json(path, payload, indent=2)
+        except Exception:
+            pass
+        return payload
+
+    def _flatten_sentences(self, structure: Dict[str, Any]) -> List[Dict[str, Any]]:
+        sentences: List[Dict[str, Any]] = []
+        for section in structure.get("sections", []):
+            for sentence in section.get("sentences", []):
+                entry = dict(sentence)
+                entry.setdefault("section_id", section.get("section_id"))
+                sentences.append(entry)
+        return sentences
+
+    def _write_clean_artifacts(self, sentences: List[Dict[str, Any]], doc_id: str, language: str) -> Dict[str, Dict[str, Any]]:
+        entries = [self._build_clean_entry(sentence, doc_id, language) for sentence in sentences]
+        clean_jsonl_path = self.out_dir / f"{doc_id}.clean.jsonl"
+        self._write_jsonl_file(clean_jsonl_path, entries)
+        txt_mode = str(self.outputs_cfg.get("clean_txt_mode", "human")).lower()
+        clean_txt_path = self.out_dir / f"{doc_id}.clean.txt"
+        self._write_clean_text(clean_txt_path, sentences, txt_mode)
+        self.logger.info("Clean ➜ %s / %s", clean_jsonl_path, clean_txt_path)
+        return {
+            "clean_jsonl": {"path": clean_jsonl_path, "bytes": clean_jsonl_path.stat().st_size if clean_jsonl_path.exists() else 0},
+            "clean_txt": {"path": clean_txt_path, "bytes": clean_txt_path.stat().st_size if clean_txt_path.exists() else 0},
+        }
+
+    def _build_clean_entry(self, sentence: Dict[str, Any], doc_id: str, language: str) -> Dict[str, Any]:
+        speaker = sentence.get("speaker")
+        start = sentence.get("start", 0.0)
+        end = sentence.get("end", start)
+        chunk_id = sentence.get("chunk_id")
+        section_id = sentence.get("section_id")
+        text_human = sentence.get("text", "").strip()
+        text_machine = sentence.get("text_machine") or text_human
+        export_default = str(self.outputs_cfg.get("clean_jsonl_payload", "both")).lower()
+        entry = {
+            "schema_version": SCHEMA_VERSION,
+            "id": stable_id(doc_id, start, end, speaker),
+            "source": self.media_path.name,
+            "unit": "sentence",
+            "section_id": section_id,
+            "chunk_id": chunk_id,
+            "speaker": speaker,
+            "ts_start": start,
+            "ts_end": end,
+            "text_human": text_human,
+            "text_machine": text_machine,
+            "export_default": export_default,
+            "confidence_mean": sentence.get("confidence_mean"),
+            "confidence_p05": sentence.get("confidence_p05"),
+            "lang": language,
+            "meta": {"tokens": sentence.get("tokens", 0)},
+        }
+        return entry
+
+    def _write_clean_text(self, path: Path, sentences: List[Dict[str, Any]], mode: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8", newline="\n") as handle:
+            for sentence in sentences:
+                text = sentence.get("text_human") if mode == "human" else sentence.get("text_machine") or sentence.get("text_human")
+                text = (text or "").strip()
+                if not text:
+                    continue
+                speaker = sentence.get("speaker")
+                prefix = f"{speaker}: " if speaker else ""
+                handle.write(f"{prefix}{text}\n")
+
+    def _write_chunk_artifacts(
+        self,
+        structure: Dict[str, Any],
+        chunks: List[Dict[str, Any]],
+        doc_id: str,
+        language: str,
+    ) -> Dict[str, Dict[str, Any]]:
+        artifacts: Dict[str, Dict[str, Any]] = {}
+        if not chunks:
+            return artifacts
+        chunk_jsonl_path = self.out_dir / f"{doc_id}.chunks.jsonl"
+        self._write_jsonl_file(chunk_jsonl_path, chunks)
+        self.logger.info("Chunks ➜ %s (%d blocs)", chunk_jsonl_path, len(chunks))
+        artifacts["chunks_jsonl"] = {"path": chunk_jsonl_path, "bytes": chunk_jsonl_path.stat().st_size}
+
+        meta = {
+            "schema_version": SCHEMA_VERSION,
+            "document_id": doc_id,
+            "count": len(chunks),
+            "order": [chunk["id"] for chunk in chunks],
+            "map_section_to_chunks": self._map_sections_to_chunks(chunks),
+            "created_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        }
+        meta_path = self.out_dir / f"{doc_id}.chunks.meta.json"
+        write_json(meta_path, meta, indent=2)
+        artifacts["chunks_meta"] = {"path": meta_path, "bytes": meta_path.stat().st_size}
+
+        quotes_path = self.out_dir / f"{doc_id}.quotes.jsonl"
+        quotes_entries = self._build_quotes_entries(structure, chunks, language)
+        self._write_jsonl_file(quotes_path, quotes_entries)
+        artifacts["quotes_jsonl"] = {"path": quotes_path, "bytes": quotes_path.stat().st_size if quotes_path.exists() else 0}
+        return artifacts
+
+    def _map_sections_to_chunks(self, chunks: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+        mapping: Dict[str, List[str]] = {}
+        for chunk in chunks:
+            for section_id in chunk.get("section_ids", []):
+                mapping.setdefault(str(section_id), []).append(chunk["id"])
+        return mapping
+
+    def _build_quotes_entries(self, structure: Dict[str, Any], chunks: List[Dict[str, Any]], language: str) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        if not structure:
+            return entries
+        chunk_lookup = [(chunk["id"], chunk["start"], chunk["end"]) for chunk in chunks]
+        for section in structure.get("sections", []):
+            section_id = section.get("section_id")
+            for quote in section.get("quotes", []):
+                quote_id = stable_id(section_id or self.media_path.stem, section.get("start"), section.get("end"))
+                chunk_id = self._chunk_id_for_timespan(chunk_lookup, section.get("start"), section.get("end"))
+                entries.append(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "id": quote_id,
+                        "section_id": section_id,
+                        "chunk_id": chunk_id,
+                        "ts_start": section.get("start"),
+                        "ts_end": section.get("end"),
+                        "text": quote,
+                        "lang": language,
+                    }
+                )
+        return entries
+
+    def _collect_low_conf_spans(
+        self,
+        structure: Dict[str, Any],
+        chunks: List[Dict[str, Any]],
+        language: str,
+    ) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        chunk_lookup = [(chunk["id"], chunk["start"], chunk["end"]) for chunk in chunks]
+        for section in structure.get("sections", []):
+            section_id = section.get("section_id")
+            for sentence in section.get("sentences", []):
+                mean = sentence.get("confidence_mean")
+                p05 = sentence.get("confidence_p05")
+                reason = None
+                if mean is not None and mean < self.low_conf_threshold:
+                    reason = "low_mean"
+                elif p05 is not None and p05 < self.low_conf_p05_threshold:
+                    reason = "p05_drop"
+                if not reason:
+                    continue
+                chunk_id = sentence.get("chunk_id") or self._chunk_id_for_timespan(chunk_lookup, sentence.get("start"), sentence.get("end"))
+                entry = {
+                    "schema_version": SCHEMA_VERSION,
+                    "id": stable_id(self.media_path.stem, sentence.get("start"), sentence.get("end"), sentence.get("speaker")),
+                    "source": self.media_path.name,
+                    "section_id": section_id,
+                    "chunk_id": chunk_id,
+                    "ts_start": sentence.get("start"),
+                    "ts_end": sentence.get("end"),
+                    "speaker": sentence.get("speaker"),
+                    "text_human": sentence.get("text"),
+                    "text_machine": sentence.get("text_machine") or sentence.get("text"),
+                    "reason": reason,
+                    "score_mean": mean,
+                    "p05": p05,
+                    "lang": language,
+                }
+                entries.append(entry)
+        for chunk in chunks:
+            if chunk.get("low_span_ratio", 0) >= self.chunker.low_span_threshold:
+                entries.append(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "id": stable_id(chunk["document_id"], chunk["start"], chunk["end"], chunk.get("speaker_majority")),
+                        "source": self.media_path.name,
+                        "section_id": ",".join(chunk.get("section_ids", [])),
+                        "chunk_id": chunk["id"],
+                        "ts_start": chunk["start"],
+                        "ts_end": chunk["end"],
+                        "speaker": chunk.get("speaker_majority"),
+                        "text_human": chunk.get("text_human"),
+                        "text_machine": chunk.get("text_machine"),
+                        "reason": "low_span",
+                        "score_mean": chunk.get("confidence_mean"),
+                        "p05": chunk.get("confidence_p05"),
+                        "lang": language,
+                    }
+                )
+        entries.sort(key=lambda item: (item.get("score_mean") or 1.0, item.get("p05") or 1.0))
+        return entries
+
+    def _write_low_conf_jsonl(self, entries: List[Dict[str, Any]], doc_id: str) -> Path:
+        path = self.out_dir / f"{doc_id}.low_confidence.jsonl"
+        self._write_jsonl_file(path, entries)
+        self.logger.info("Low-confidence queue ➜ %s (%d spans)", path, len(entries))
+        return path
+
+    def _build_quality_metrics(
+        self,
+        sentences: List[Dict[str, Any]],
+        chunks: List[Dict[str, Any]],
+        clean_report: Dict[str, Any],
+        polish_report: Dict[str, Any],
+        low_conf_entries: List[Dict[str, Any]],
+        structure: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        tokens_total = sum(chunk.get("token_count", 0) for chunk in chunks)
+        chunk_conf = [chunk.get("confidence_mean") for chunk in chunks if chunk.get("confidence_mean") is not None]
+        chunk_mean = round(sum(chunk_conf) / len(chunk_conf), 3) if chunk_conf else None
+        metrics = {
+            "schema_version": SCHEMA_VERSION,
+            "document_id": self.media_path.stem,
+            "tokens_total": tokens_total,
+            "phrases_total": len(sentences),
+            "chunks_total": len(chunks),
+            "low_conf_count": len(low_conf_entries),
+            "chunk_confidence_mean": chunk_mean,
+            "clean": clean_report,
+            "polish": polish_report,
+            "sparkline": self._build_sparkline(structure),
+            "overlap_sentences": self.chunker.overlap_sentences,
+        }
+        if sentences:
+            low_sentences = sum(
+                1 for sentence in sentences if sentence.get("confidence_mean") is not None and sentence["confidence_mean"] < self.low_conf_threshold
+            )
+            metrics["low_sentence_ratio"] = round(low_sentences / len(sentences), 3)
+        metrics["stages"] = self.run_stats.get("stages", {})
+        return metrics
+
+    def _write_metrics_file(
+        self,
+        metrics_payload: Dict[str, Any],
+        clean_artifacts: Dict[str, Dict[str, Any]],
+        chunk_artifacts: Dict[str, Dict[str, Any]],
+        low_conf_path: Path,
+    ) -> None:
+        doc_id = self.media_path.stem
+        artifacts = {}
+        artifacts.update(clean_artifacts)
+        artifacts.update(chunk_artifacts)
+        if low_conf_path:
+            artifacts["low_confidence"] = {
+                "path": low_conf_path,
+                "bytes": low_conf_path.stat().st_size if low_conf_path.exists() else 0,
+            }
+        metrics_path = self.out_dir / f"{doc_id}.metrics.json"
+        payload = dict(metrics_payload)
+        serialized_artifacts = {}
+        for name, info in artifacts.items():
+            if info is None:
+                serialized_artifacts[name] = None
+                continue
+            entry = dict(info)
+            if isinstance(entry.get("path"), Path):
+                entry["path"] = str(entry["path"])
+            serialized_artifacts[name] = entry
+        payload["artifacts"] = serialized_artifacts
+        payload["generated_at"] = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        payload["stages_ms"] = {name: int(duration * 1000) for name, duration in self.run_stats.get("stages", {}).items()}
+        write_json(metrics_path, payload, indent=2)
+        self.logger.info("Métriques ➜ %s", metrics_path)
+
+    def _build_sparkline(self, structure: Optional[Dict[str, Any]]) -> str:
+        if not structure:
+            return ""
+        blocks = "▁▂▃▄▅▆▇█"
+        spark = []
+        for section in structure.get("sections", []):
+            avg = section.get("metadata", {}).get("avg_confidence")
+            if avg is None:
+                spark.append("·")
+                continue
+            index = min(len(blocks) - 1, max(0, int(avg * (len(blocks) - 1))))
+            spark.append(blocks[index])
+        return "".join(spark)
+
+    def _write_jsonl_file(self, path: Path, rows: List[Dict[str, Any]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8", newline="\n") as handle:
+            for row in rows or []:
+                handle.write(json.dumps(row, ensure_ascii=False))
+                handle.write("\n")
 
     def _mark_stage_duration(self, name: str, start_ts: float) -> None:
         elapsed = round(time.time() - start_ts, 3)
@@ -653,6 +1188,12 @@ class PipelineRunner:
             self.stage_align()
         elif self.command == "post":
             self.stage_post()
+        elif self.command == "resume":
+            self.logger.info("=== RESUME (post-processing only) ===")
+            self.align_info = self._load_align_from_disk()
+            self.stage_post()
+            if not self.dry_run:
+                self.last_artifacts = self.stage_export()
         elif self.command == "export":
             self.stage_export()
         else:
@@ -665,6 +1206,11 @@ class PipelineRunner:
         self.stage_merge()
         self.stage_align()
         self.stage_post()
+        if self.dry_run:
+            self.logger.info("--dry-run activé: arrêt avant exports finaux.")
+            if self.strict:
+                self._verify_artifacts()
+            return
         self.last_artifacts = self.stage_export()
         if self.strict:
             self._verify_artifacts()

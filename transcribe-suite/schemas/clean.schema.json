@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "clean.jsonl v1",
+  "type": "object",
+  "required": ["schema_version", "id", "source", "unit", "text_human", "text_machine"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "id": { "type": "string" },
+    "source": { "type": "string" },
+    "unit": { "type": "string", "enum": ["sentence", "paragraph", "section"] },
+    "section_id": { "type": "string" },
+    "speaker": { "type": "string" },
+    "ts_start": { "type": "number" },
+    "ts_end": { "type": "number" },
+    "text_human": { "type": "string" },
+    "text_machine": { "type": "string" },
+    "export_default": { "type": "string", "enum": ["human", "machine", "both"] },
+    "confidence_mean": { "type": "number", "minimum": 0, "maximum": 1 },
+    "confidence_p05": { "type": "number", "minimum": 0, "maximum": 1 },
+    "lang": { "type": "string" },
+    "meta": { "type": "object" }
+  }
+}

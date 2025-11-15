@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from glossary import GlossaryManager
 from polish import Polisher
 
 
@@ -116,6 +117,48 @@ def test_list_markers_and_quotes():
     assert "• second" in text
     assert "«\u00A0item" in text
     assert "second\u00A0?" in text
+
+
+def test_polish_removes_oral_markers():
+    cfg = {
+        "enabled": True,
+        "strip_oral_markers": True,
+        "oral_markers": ["tu vois"],
+        "ensure_terminal_punct": True,
+    }
+    polisher = Polisher(cfg, logger=_DummyLogger())
+    segments = [{"start": 0.0, "end": 1.0, "text": "tu vois on avance", "speaker": "S", "words": []}]
+    polished = polisher.run(segments, lang="fr")
+    assert polished[0]["text"].startswith("On avance")
+
+
+def test_polish_respects_glossary_case():
+    cfg = {
+        "enabled": True,
+        "sentence_case": True,
+        "ensure_terminal_punct": True,
+    }
+    glossary = GlossaryManager({"entries": ["OpenAI"]})
+    polisher = Polisher(cfg, logger=_DummyLogger(), glossary=glossary)
+    segments = [{"start": 0.0, "end": 1.0, "text": "openai lance un produit", "speaker": "S", "words": []}]
+    polished = polisher.run(segments, lang="fr")
+    assert "OpenAI" in polished[0]["text"]
+
+
+def test_polish_soft_punctuation_respects_quotes():
+    cfg = {
+        "enabled": True,
+        "sentence_case": True,
+        "punctuation": {"soft_after": [","]},
+        "ensure_terminal_punct": True,
+    }
+    polisher = Polisher(cfg, logger=_DummyLogger())
+    segments = [
+        {"start": 0.0, "end": 2.0, "text": 'il dit, "Mais alors ?" et continue', "speaker": "S0", "words": []}
+    ]
+    polished = polisher.run(segments, lang="fr")
+    text = polished[0]["text"]
+    assert "«\u00A0Mais alors ? »" in text or "« Mais alors ? »" in text
 
 
 class _DummyLogger:

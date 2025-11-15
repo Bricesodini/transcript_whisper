@@ -14,6 +14,20 @@ defaults:
     - json
     - vtt
 
+outputs:
+  clean_txt_mode: human # human|machine
+  clean_jsonl_payload: both # human|machine|both
+
+numbers:
+  human_numbers: true
+  whitelist_patterns:
+    - "\\bR2-D2\\b"
+    - "\\bM1\\s+Max\\b"
+    - "\\b\\d+\\s?(kg|mm)\\b"
+
+typography:
+  locale: auto
+
 preproc:
   target_sr: 16000
   channels: 1
@@ -54,6 +68,25 @@ cleaning:
   max_segment_gap: 1.2
   remove_fillers: true
   capitalize_sentence_start: true
+  normalization:
+    normalize_apostrophes: true
+    normalize_numbers: true
+    number_language: fr
+    max_word_repeat: 2
+    tic_markers:
+      - euh
+      - du coup
+      - donc donc
+  redundancy:
+    enabled: true
+    similarity: 0.92
+    window: 4
+    min_chars: 12
+  confidence:
+    segment_threshold: 0.55
+    word_threshold: 0.45
+    drop_segments: false
+  audit_sample_size: 6
 
 structure:
   target_section_duration: 180
@@ -66,6 +99,12 @@ structure:
 
 polish:
   enabled: true
+  strip_oral_markers: true
+  oral_markers:
+    - tu vois
+    - voilà
+    - genre
+    - bref
 
 export:
   json_indent: 2
@@ -83,10 +122,38 @@ export:
 diarization:
   model: pyannote/speaker-diarization-3.1
   authorization_env: PYANNOTE_TOKEN
-  merge_single_speaker: true
-  max_speakers: 1
-  min_speaker_turn: 1.3
-  mode: mono
+  merge_single_speaker: false
+  max_speakers: 0
+  min_speaker_turn: 0.9
+  mode: multi
+  speech_mask: false
+  speech_mask_margin: 0.15
+  pipeline_params:
+    segmentation:
+      min_duration_on: 0.15
+      min_duration_off: 0.15
+      onset: 0.4
+      offset: 0.4
+    clustering:
+      threshold: 0.65
 
 refine:
   enabled: false
+
+glossary:
+  dynamic: true
+  min_length: 3
+  entries:
+    - ChatGPT
+
+chunking:
+  enabled: true
+  target_tokens: 320
+  max_tokens: 420
+  min_tokens: 180
+  min_sentences: 2
+  overlap_sentences: 1
+
+audit:
+  enabled: true
+  max_examples: 6

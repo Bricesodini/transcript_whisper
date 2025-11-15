@@ -57,7 +57,7 @@ Chaque exécution génère :
   - stats ASR (processed / skipped / retries / workers)
   - versions des libs (python, torch, whisper, ffmpeg)
   - statut final (`ok` ou `failed`).
-- `exports/<video>/` doit contenir **exactement** : `.md`, `.json`, `.vtt`, `.chapters.json`, `.low_confidence.csv`.
+- Le dossier `TRANSCRIPT - <video>` (créé à côté du média) doit contenir **exactement** : `.md`, `.json`, `.vtt`, `.chapters.json`, `.low_confidence.csv`.
 - `work/<video>/` doit contenir `audio_16k.wav`, `manifest.csv`, `02_merged_raw.json`, `03_aligned_whisperx.json`, `04_cleaned.json`, `05_polished.json`.
 
 Le script `bin/env_check.sh` doit être vert **avant** toute exécution :

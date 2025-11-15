@@ -92,6 +92,7 @@ def _transcribe_segment(job: Dict[str, Any], decoder_cfg: Dict[str, Any]) -> Dic
         best_of=int(decoder_cfg.get("best_of", 1)),
         language=forced_language,
         vad_filter=bool(decoder_cfg.get("vad_filter", False)),
+        chunk_length=decoder_cfg.get("chunk_length"),
         word_timestamps=bool(decoder_cfg.get("word_timestamps", False)),
         condition_on_previous_text=bool(decoder_cfg.get("condition_on_previous_text", False)),
         no_speech_threshold=float(decoder_cfg.get("no_speech_threshold", 0.6)),
@@ -103,6 +104,7 @@ def _transcribe_segment(job: Dict[str, Any], decoder_cfg: Dict[str, Any]) -> Dic
         "best_of",
         "language",
         "vad_filter",
+        "chunk_length",
         "word_timestamps",
         "condition_on_previous_text",
         "no_speech_threshold",
@@ -416,24 +418,45 @@ class ASRProcessor:
         if batch_size not in (None, 0) and not self._batch_warned:
             self.logger.warning("Paramètre 'asr.batch_size' ignoré (non supporté par faster-whisper).")
             self._batch_warned = True
+        chunk_length = self._sanitize_chunk_length(cfg.get("chunk_length"))
         return {
             "temperature": cfg.get("temperature", 0.0),
             "temperature_fallback": cfg.get("temperature_fallback"),
             "beam_size": cfg.get("beam_size", 1),
             "best_of": cfg.get("best_of", 1),
             "vad_filter": cfg.get("vad_filter", False),
+            "chunk_length": chunk_length,
             "word_timestamps": cfg.get("word_timestamps", False),
             "condition_on_previous_text": cfg.get("condition_on_previous_text", False),
             "no_speech_threshold": cfg.get("no_speech_threshold", 0.6),
             "initial_prompt": initial_prompt or cfg.get("initial_prompt"),
         }
 
+    def _sanitize_chunk_length(self, raw_value: Any) -> Optional[int]:
+        if raw_value in (None, "", False, 0):
+            return None
+        try:
+            chunk_value = float(raw_value)
+        except (TypeError, ValueError):
+            self.logger.warning("Paramètre asr.chunk_length invalide (%r) ➜ ignoré", raw_value)
+            return None
+        if chunk_value <= 0:
+            self.logger.warning("Paramètre asr.chunk_length <= 0 (%s) ➜ ignoré", raw_value)
+            return None
+        sanitized = int(round(chunk_value))
+        if sanitized <= 0:
+            self.logger.warning("Paramètre asr.chunk_length trop faible (%s) ➜ ignoré", raw_value)
+            return None
+        return sanitized
+
     def _resolve_worker_count(self) -> int:
-        limit = int(self.asr_cfg.get("max_workers", 10))
+        limit = int(self.asr_cfg.get("max_workers", 8))
+        env_limit = self._env_thread_ceiling()
+        ceiling = min(limit, env_limit) if env_limit else limit
         physical = self._physical_cores()
         logical = os.cpu_count() or 1
         target = physical or logical
-        return max(1, min(limit, target))
+        return max(1, min(ceiling, target))
 
     def _physical_cores(self) -> Optional[int]:
         try:
@@ -442,13 +465,31 @@ class ASRProcessor:
             return None
         return psutil.cpu_count(logical=False)
 
+    def _env_thread_ceiling(self) -> Optional[int]:
+        for key in ("ASR_THREADS", "CTRANSLATE2_NUM_THREADS"):
+            value = os.environ.get(key)
+            if not value:
+                continue
+            try:
+                parsed = int(value)
+            except ValueError:
+                continue
+            if parsed > 0:
+                return parsed
+        return None
+
     def _blas_env(self) -> Dict[str, str]:
-        return {
-            "OMP_NUM_THREADS": "1",
-            "MKL_NUM_THREADS": "1",
-            "VECLIB_MAXIMUM_THREADS": "1",
-            "OPENBLAS_NUM_THREADS": "1",
-        }
+        env: Dict[str, str] = {}
+        thread_cap = os.environ.get("ASR_THREADS")
+        default_threads = thread_cap or "1"
+        for var in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+            env[var] = os.environ.get(var, default_threads if thread_cap else "1")
+        if thread_cap:
+            env["ASR_THREADS"] = thread_cap
+        ctranslate_threads = os.environ.get("CTRANSLATE2_NUM_THREADS") or thread_cap
+        if ctranslate_threads:
+            env["CTRANSLATE2_NUM_THREADS"] = ctranslate_threads
+        return env
 
     def _resolve_language(
         self,

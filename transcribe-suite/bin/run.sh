@@ -14,6 +14,11 @@ if [[ -f "$ROOT_DIR/.env.local" ]]; then
   set +a
 fi
 
+ASR_ENV_SCRIPT="$SCRIPT_DIR/asr_env.sh"
+if [[ -f "$ASR_ENV_SCRIPT" ]]; then
+  source "$ASR_ENV_SCRIPT"
+fi
+
 usage() {
   cat <<USAGE
 Usage: run.sh --input /path/to/file [--lang auto] [--profile default] [--export txt,md]

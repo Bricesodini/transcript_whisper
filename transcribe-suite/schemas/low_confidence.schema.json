@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "low_confidence.jsonl v1",
+  "type": "object",
+  "required": ["schema_version", "id", "ts_start", "ts_end", "speaker", "text_machine", "reason", "score_mean"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "id": { "type": "string" },
+    "source": { "type": "string" },
+    "section_id": { "type": "string" },
+    "chunk_id": { "type": "string" },
+    "ts_start": { "type": "number" },
+    "ts_end": { "type": "number" },
+    "speaker": { "type": "string" },
+    "text_human": { "type": "string" },
+    "text_machine": { "type": "string" },
+    "reason": { "type": "string", "enum": ["low_mean", "p05_drop", "word_flag"] },
+    "score_mean": { "type": "number" },
+    "p05": { "type": "number" },
+    "lang": { "type": "string" },
+    "meta": { "type": "object" }
+  }
+}

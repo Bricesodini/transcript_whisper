@@ -40,17 +40,18 @@ segmenter:
 
 asr:
   device: auto
-  compute_type: auto
+  compute_type: int8
   temperature: 0.0
   temperature_fallback: 0.2
   beam_size: 1
   best_of: 1
   batch_size: 24
-  vad_filter: false
+  vad_filter: true
   word_timestamps: false
   condition_on_previous_text: false
+  chunk_length: 20.0
   no_speech_threshold: 0.6
-  max_workers: 10
+  max_workers: 8
   max_retries: 2
   initial_prompt: null
 
@@ -58,6 +59,9 @@ align:
   language: auto
   device: auto
   model_name: null
+  workers: 4
+  batch_size: 16
+  speech_only: false
 
 languages:
   fr:
@@ -71,6 +75,10 @@ diarization:
   merge_single_speaker: true
   max_speakers: 2
   min_speaker_turn: 1.2
+  device: cpu
+  segmentation_batch: 8
+  embedding_batch: 8
+  speech_mask: false
 
 cleaning:
   min_segment_duration: 1.2
@@ -134,6 +142,7 @@ polish:
     en: ["the","a","an","of","and","or","to","for","on","in","with","this","that","these","those","who","what","which","not","very","like","we","you","they","i","is","are","be","have","do","it","so"]
 
 export:
+  parallel: false
   subtitle_line_length: 72
   json_indent: 2
   low_confidence:

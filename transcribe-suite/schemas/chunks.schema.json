@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "chunks.jsonl v1",
+  "type": "object",
+  "required": ["schema_version", "id", "document_id", "text_human", "text_machine", "ts_start", "ts_end"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0.0" },
+    "id": { "type": "string" },
+    "document_id": { "type": "string" },
+    "section_ids": { "type": "array", "items": { "type": "string" } },
+    "parent_ids_prev": { "type": "array", "items": { "type": "string" } },
+    "speaker_majority": { "type": "string" },
+    "speaker_switches": { "type": "integer" },
+    "text_human": { "type": "string" },
+    "text_machine": { "type": "string" },
+    "ts_start": { "type": "number" },
+    "ts_end": { "type": "number" },
+    "overlap_sentences": { "type": "integer" },
+    "confidence_mean": { "type": "number", "minimum": 0, "maximum": 1 },
+    "confidence_p05": { "type": "number", "minimum": 0, "maximum": 1 },
+    "low_span_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+    "lang": { "type": "string" },
+    "meta": { "type": "object" }
+  }
+}

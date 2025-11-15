@@ -1,5 +1,7 @@
+import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -10,10 +12,41 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
+import hashlib
+
+THREAD_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS")
 
 
 class PipelineError(RuntimeError):
     """Custom exception for pipeline failures."""
+
+
+def compute_post_threads() -> int:
+    cores = os.cpu_count() or 8
+    return max(6, cores - 1)
+
+
+def apply_thread_env(label: str, threads: int) -> None:
+    target = max(1, int(threads))
+    if label:
+        os.environ[label] = str(target)
+    for var in THREAD_VARS:
+        os.environ[var] = str(target)
+
+
+def configure_torch_threads(num_threads: int, interop_threads: int = 2) -> None:
+    try:
+        import torch  # type: ignore
+    except ImportError:
+        return
+    try:
+        torch.set_num_threads(max(1, int(num_threads)))
+    except Exception:
+        pass
+    try:
+        torch.set_num_interop_threads(max(1, int(interop_threads)))
+    except Exception:
+        pass
 
 
 def load_config(path: Path) -> Dict[str, Any]:
@@ -56,9 +89,6 @@ def prepare_paths(root: Path, cfg: Dict[str, Any]) -> Dict[str, Path]:
         "exports_dir": root / "exports",
         "logs_dir": root / "logs",
         "cache_dir": root / "cache",
-        # Back-compat with anciens presets
-        "build_dir": root / "build",
-        "out_dir": root / "out",
     }
     resolved: Dict[str, Path] = {}
     for key, default in defaults.items():
@@ -69,7 +99,7 @@ def prepare_paths(root: Path, cfg: Dict[str, Any]) -> Dict[str, Path]:
     return resolved
 
 
-def setup_logger(log_dir: Path, run_name: str, verbose: bool = True) -> logging.Logger:
+def setup_logger(log_dir: Path, run_name: str, log_level: str = "INFO") -> logging.Logger:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{run_name}.log"
     logger = logging.getLogger(f"transcribe-suite.{run_name}")
@@ -82,11 +112,12 @@ def setup_logger(log_dir: Path, run_name: str, verbose: bool = True) -> logging.
     fh.setLevel(logging.DEBUG)
     logger.addHandler(fh)
 
-    if verbose:
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setFormatter(fmt)
-        sh.setLevel(logging.INFO)
-        logger.addHandler(sh)
+    level_name = str(log_level or "INFO").upper()
+    console_level = getattr(logging, level_name, logging.INFO)
+    sh = logging.StreamHandler(sys.stdout)
+    sh.setFormatter(fmt)
+    sh.setLevel(console_level)
+    logger.addHandler(sh)
     return logger
 
 
@@ -183,3 +214,15 @@ def normalize_media_path(raw: Optional[Any]) -> Optional[str]:
         cleaned = unquote(cleaned[7:])
     cleaned = cleaned.replace("\\ ", " ")
     return cleaned or None
+
+
+def stable_id(source_path: str, ts_start: float, ts_end: float, speaker: Optional[str] = None) -> str:
+    """Generate a deterministic identifier for artifacts."""
+    payload = {
+        "src": source_path,
+        "t0": round(float(ts_start or 0.0), 3),
+        "t1": round(float(ts_end or ts_start or 0.0), 3),
+        "spk": speaker or "",
+    }
+    digest_input = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha1(digest_input).hexdigest()[:12]

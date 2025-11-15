@@ -1,16 +1,65 @@
-# Python virtual environments
+# --- Python virtual environments ---
 .venv/
 transcribe-suite/.venv/
 .env.local
 
-# Build/output artifacts
+# --- Build/output artifacts ---
 transcribe-suite/build/
 transcribe-suite/out/
 transcribe-suite/logs/
+transcribe-suite/exports/
+transcribe-suite/results/
 
-# Cache
+# --- Working / temporary directories ---
+transcribe-suite/work/
+transcribe-suite/tmp/
+transcribe-suite/tests/output/
+transcribe-suite/tests/tmp/
+
+# --- Audio / video files (too large for Git) ---
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.aac
+*.ogg
+*.mp4
+*.mov
+*.mkv
+*.webm
+
+# --- Model weights / checkpoints / embeddings ---
+*.pt
+*.bin
+*.ckpt
+*.onnx
+*.safetensors
+*.tflite
+*.h5
+*.mlmodel
+*.npy
+*.npz
+
+# --- Cache files ---
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.tmp
+*.log
+*.bak
+*.swp
 
-# OS files
+# --- OS / Editor files ---
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.code-workspace
+
+# --- Misc ---
+*.lock
+*.csv
+*.jsonl
+*.sqlite
+*.dbtranscribe-suite/work/

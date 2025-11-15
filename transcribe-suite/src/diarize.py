@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from utils import PipelineError
+from utils import PipelineError, compute_post_threads, configure_torch_threads
 
 try:
     from pyannote.audio import Pipeline as PyannotePipeline
@@ -13,12 +13,23 @@ except ImportError as exc:  # pragma: no cover
 else:
     IMPORT_ERROR = None
 
+try:
+    import torch
+except ImportError:  # pragma: no cover
+    torch = None
+
 
 class Diarizer:
     def __init__(self, config: Dict, logger):
         self.logger = logger
         self.cfg = config.get("diarization", {})
         self._pipeline: Optional[PyannotePipeline] = None
+        self.device = self.cfg.get("device", "cpu")
+        self.seg_batch = int(self.cfg.get("segmentation_batch", 0) or 0)
+        self.emb_batch = int(self.cfg.get("embedding_batch", 0) or 0)
+        self.speech_mask_enabled = bool(self.cfg.get("speech_mask", False))
+        self.speech_mask_margin = float(self.cfg.get("speech_mask_margin", 0.05) or 0.05)
+        self.pipeline_params = self.cfg.get("pipeline_params") or {}
 
     def load(self):
         if self._pipeline is not None:
@@ -36,10 +47,15 @@ class Diarizer:
                 f"Définis la variable d'environnement {token_env}."
             )
         self.logger.info("Chargement du pipeline Pyannote (%s)", model_id)
-        self._pipeline = PyannotePipeline.from_pretrained(model_id, use_auth_token=token)
+        pipeline = PyannotePipeline.from_pretrained(model_id, use_auth_token=token)
+        self._apply_device(pipeline)
+        self._configure_batches(pipeline)
+        self._apply_pipeline_params(pipeline)
+        self._pipeline = pipeline
         return self._pipeline
 
-    def run(self, audio_path: Path, build_dir: Path) -> Dict:
+    def run(self, audio_path: Path, build_dir: Path, speech_segments: Optional[List[Dict]] = None) -> Dict:
+        configure_torch_threads(self._thread_budget(), interop_threads=2)
         pipeline = self.load()
         diarization = pipeline(str(audio_path))
         diarization.uri = self._safe_uri(audio_path.stem)
@@ -56,10 +72,49 @@ class Diarizer:
                 }
             )
         segments = self._stabilize_segments(segments)
+        if self.speech_mask_enabled and speech_segments:
+            segments = self._apply_speech_mask(segments, speech_segments)
         max_speakers = int(self.cfg.get("max_speakers", 0) or 0)
         if max_speakers > 0:
             segments = self._limit_speakers(segments, max_speakers)
         return {"segments": segments, "rttm": rttm_path}
+
+    def _apply_device(self, pipeline: PyannotePipeline) -> None:
+        target = self._sanitize_device(self.device)
+        if target is None:
+            return
+        try:
+            pipeline.to(target)
+            self.logger.info("Pyannote ➜ device %s", target)
+        except AttributeError:
+            # versions très anciennes : pas de to()
+            self.logger.debug("Pipeline Pyannote sans support explicite .to(); device par défaut conservé.")
+        except Exception as exc:  # pragma: no cover
+            self.logger.warning("Impossible de basculer Pyannote sur %s (%s)", target, exc)
+
+    def _configure_batches(self, pipeline: PyannotePipeline) -> None:
+        if self.seg_batch and hasattr(pipeline, "segmentation"):
+            try:
+                pipeline.segmentation.batch_size = int(self.seg_batch)
+            except Exception:  # pragma: no cover
+                self.logger.warning("Batch segmentation=%s non appliqué", self.seg_batch)
+        if self.emb_batch and hasattr(pipeline, "embedding"):
+            try:
+                pipeline.embedding.batch_size = int(self.emb_batch)
+            except Exception:  # pragma: no cover
+                self.logger.warning("Batch embedding=%s non appliqué", self.emb_batch)
+
+    def _apply_pipeline_params(self, pipeline: PyannotePipeline) -> None:
+        if not self.pipeline_params:
+            return
+        try:
+            pipeline.instantiate(self.pipeline_params)
+            self.logger.info(
+                "Paramètres Pyannote personnalisés appliqués (%s)",
+                ", ".join(self.pipeline_params.keys()),
+            )
+        except Exception as exc:  # pragma: no cover
+            self.logger.warning("Impossible d'appliquer les paramètres Pyannote (%s)", exc)
 
     def _safe_uri(self, stem: str) -> str:
         """Pyannote RTTM writer rejects URIs with spaces => sanitize."""
@@ -113,3 +168,47 @@ class Diarizer:
             else:
                 seg["speaker"] = template.format(max_speakers - 1)
         return segments
+
+    def _apply_speech_mask(self, segments: List[Dict], speech_segments: List[Dict]) -> List[Dict]:
+        windows = []
+        for seg in speech_segments:
+            try:
+                start = float(seg.get("start", 0.0))
+                end = float(seg.get("end", start))
+            except (TypeError, ValueError):
+                continue
+            if end <= start:
+                continue
+            windows.append((start, end))
+        if not windows:
+            return segments
+        masked: List[Dict] = []
+        margin = max(0.0, self.speech_mask_margin)
+        for seg in segments:
+            mid = (seg.get("start", 0.0) + seg.get("end", seg.get("start", 0.0))) / 2
+            if any(win_start - margin <= mid <= win_end + margin for win_start, win_end in windows):
+                masked.append(seg)
+        if not masked:
+            self.logger.warning("Speech-mask n'a conservé aucun segment diar ➜ fallback complet")
+            return segments
+        self.logger.info("Speech-mask: %d/%d segments conservés", len(masked), len(segments))
+        return masked
+
+    def _thread_budget(self) -> int:
+        value = os.environ.get("POST_THREADS")
+        try:
+            parsed = int(value) if value is not None else 0
+        except ValueError:
+            parsed = 0
+        return max(4, parsed or compute_post_threads())
+
+    def _sanitize_device(self, hint: Optional[str]):
+        if torch is None:
+            return None
+        if hint is None or str(hint).strip().lower() in {"", "auto"}:
+            return torch.device("cpu")
+        try:
+            return torch.device(hint)
+        except Exception:
+            self.logger.warning("Device Pyannote invalide '%s' ➜ cpu", hint)
+            return torch.device("cpu")
