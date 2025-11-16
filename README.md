@@ -33,8 +33,39 @@ bin/env_check.sh
 - `.quotes.jsonl` (extractions liées aux sections/chunks)
 - `.low_confidence.jsonl` (file d'attente pour relecture ciblée)
 - `.metrics.json` (tableau machine-readable pour log/graphes)
+- `.clean.final.txt` / `.final.md` / `.qa.json` (via le post-traitement optionnel ci-dessous)
 
 👉 Référence complète du mode stable : `docs/STABLE_BASE.md` (versions, flags autorisés, procédures de reprise).
+
+---
+
+## 🧹 Post-traitement & QA éditoriale
+
+Un script dédié (`tools/postprocess_transcript.py`) applique la chaîne de polish générique décrite plus haut :
+
+1. **Diagnostic des assets** : vérifie la cohérence `clean.txt` / `metrics.json` / `low_confidence.jsonl`.
+2. **Normalisation** : nettoyage des timestamps/balises, homogénéisation typographique + application du glossaire.
+3. **Gestion low-confidence** : alignement automatique des entrées `low_confidence.jsonl`, marquage ⚠️ inline et annexe des phrases non localisées.
+4. **Assemblage final / Markdown** : regroupement en paragraphes, conservation optionnelle des locuteurs, rendu Markdown basé sur `.chapters.json` (ou fallback structuré + citations).
+5. **QA JSON** : récapitulatif des phrases modifiées, drapeaux de relecture, incohérences détectées.
+
+```bash
+cd transcribe-suite
+source .venv/bin/activate
+python tools/postprocess_transcript.py \
+  --export-dir "exports/TRANSCRIPT - Mon Talk" \
+  --doc-id "Mon Talk" \
+  --config configs/postprocess.default.yaml
+```
+
+👉 Paramètres clés dans `configs/postprocess.default.yaml` (profil `default`, suffixes de sortie, options de normalisation, règles low-conf, QA). Ajoute ton glossaire / overrides en dupliquant ce fichier ou en passant `--profile`.
+
+Sorties supplémentaires (à côté des artefacts existants) :
+
+- `<doc>.clean.normalized.txt` — version clean 1:1 vs source, normalisée.
+- `<doc>.clean.final.txt` — texte lisible (paragraphes, locuteurs optionnels, marqueurs ⚠️).
+- `<doc>.final.md` — structuré `# / ##` + bloc “Citations clés”.
+- `<doc>.qa.json` — rapport machine-readable (lignes modifiées, flags, issues).
 
 ---
 

@@ -1,0 +1,70 @@
+defaults:
+  profile: default
+  keep_speakers: true
+  normalized_suffix: ".clean.normalized.txt"
+  final_suffix: ".clean.final.txt"
+  markdown_suffix: ".final.md"
+  qa_suffix: ".qa.json"
+
+profiles:
+  default:
+    normalize:
+      remove_timestamps: true
+      strip_bracketed_markers: true
+      strip_internal_tags: true
+      collapse_whitespace: true
+      dedupe_repeated_words: true
+      fix_punctuation: true
+      trim_speaker_labels: true
+      replacements:
+        - pattern: "[\u2019`]"
+          replacement: "'"
+        - pattern: "\\s+\\.\\s+\\."
+          replacement: "."
+        - pattern: "\\s+\\,\\s+\\,"
+          replacement: ","
+      technical_markers:
+        - "\\[?music\\]? "
+        - "\\[?musique\\]? "
+        - "\\[?applause\\]? "
+        - "\\[?applaudissements\\]? "
+      glossary:
+        canonical_forms:
+          - IA
+          - ChatGPT
+          - OpenAI
+        replacements:
+          - source: "chat gpt"
+            target: "ChatGPT"
+          - source: "i.a."
+            target: "IA"
+          - source: "intelligence artificielle"
+            target: "intelligence artificielle"
+
+    low_confidence:
+      enabled: true
+      match_threshold: 0.58
+      flag_token: "⚠️"
+      review_label: "Phrase à vérifier"
+      annotation_style: inline
+      orphan_heading: "Phrases à vérifier (non localisées)"
+
+    paragraphs:
+      max_sentences: 4
+      max_chars: 650
+      keep_speakers: true
+
+    markdown:
+      title_prefix: "Transcription nettoyée"
+      fallback_section_prefix: "Partie"
+      fallback_paragraphs_per_section: 4
+      include_citations: true
+      citations_heading: "### Citations clés"
+      citations_max: 4
+
+    qa:
+      check_double_spaces: true
+      check_space_before_punct: true
+      enforce_glossary_sources: ["chat gpt", "i.a."]
+      allow_empty_line_drop: true
+
