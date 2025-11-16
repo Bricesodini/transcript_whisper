@@ -5,6 +5,7 @@ import json
 import logging
 import platform
 import subprocess
+import sys
 import time
 from importlib import metadata
 from pathlib import Path
@@ -41,6 +42,17 @@ from utils import (
 
 COMMANDS = ("run", "prepare", "asr", "merge", "align", "post", "export", "resume", "dry-run")
 SCHEMA_VERSION = "1.0.0"
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+TOOLS_DIR = ROOT_DIR / "tools"
+if TOOLS_DIR.exists():
+    tools_str = str(TOOLS_DIR)
+    if tools_str not in sys.path:
+        sys.path.append(tools_str)
+try:
+    from update_arte_outputs import refresh_arte_outputs as outputs_polisher
+except Exception:  # pragma: no cover - optional dependency
+    outputs_polisher = None
 
 
 def parse_args():
@@ -99,8 +111,15 @@ def parse_args():
     parser.add_argument("--dry-run", action="store_true", help="Exécute les étapes jusqu'à l'audit sans exporter")
     parser.add_argument("--no-audit", action="store_true", help="Désactive la génération de l'audit")
     parser.add_argument("--only", help="Liste d'étapes à exécuter (clean,polish,structure,chunk,audit,export)")
+    parser.add_argument(
+        "--polish-outputs",
+        dest="polish_outputs",
+        action="store_true",
+        help="Applique le polish final sur les exports (confiances, JSONL enrichis, txt/md nettoyés).",
+    )
     parser.set_defaults(vad_filter=None)
     parser.set_defaults(speech_only=None, speech_mask=None, export_parallel=None)
+    parser.set_defaults(polish_outputs=False)
     args = parser.parse_args()
     if args.strict is None:
         args.strict = True
@@ -198,6 +217,7 @@ class PipelineRunner:
         self.numbers_cfg = config.get("numbers", {})
         self.typography_cfg = config.get("typography", {})
         self.post_state_path = self.work_dir / "post_state.json"
+        self.polish_outputs_enabled = bool(getattr(args, "polish_outputs", False))
         self.post_state = self._load_post_state()
         self.config_signature = {
             "outputs": self.outputs_cfg,
@@ -544,6 +564,7 @@ class PipelineRunner:
             "audit_path": audit_path,
         }
         self._save_post_state()
+        self._maybe_polish_outputs()
         self._mark_stage_duration("post", stage_start)
         return self.post_info
 
@@ -610,6 +631,34 @@ class PipelineRunner:
             "path": aligned_path,
         }
         return self.align_info
+
+    def _maybe_polish_outputs(self) -> None:
+        if not self.polish_outputs_enabled:
+            return
+        if outputs_polisher is None:
+            self.logger.warning("Option --polish-outputs ignorée (module indisponible).")
+            return
+        if self.dry_run:
+            self.logger.info("Option --polish-outputs ignorée en mode --dry-run.")
+            return
+        try:
+            summary = outputs_polisher(
+                self.work_dir,
+                self.out_dir,
+                doc_id=self.media_path.stem,
+                low_threshold=self.low_conf_threshold,
+                chunk_low_threshold=getattr(self.chunker, "low_span_threshold", 0.1),
+                logger=self.logger,
+            )
+            if summary:
+                self.logger.info(
+                    "Polish des exports terminé (%d phrases / %d chunks / %d paragraphes).",
+                    summary.get("clean_entries", 0),
+                    summary.get("chunk_entries", 0),
+                    summary.get("paragraphs", 0),
+                )
+        except Exception:
+            self.logger.exception("Échec du polish final (--polish-outputs).")
 
     def _should_run_post_stage(self, stage_name: str) -> bool:
         if self.force:

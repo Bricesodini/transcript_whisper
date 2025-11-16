@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from utils import copy_to_clipboard
+from text_cleaning import DEFAULT_GLOSSARY, clean_human_text, normalize_markdown_line
 
 WORD_PATTERN = re.compile(r"[0-9A-Za-zÀ-ÖØ-öø-ÿ’'_-]+")
 SECTION_TOLERANCE = 0.05
@@ -86,15 +87,20 @@ class Exporter:
             if summary:
                 lines.append(f"_{summary}_")
             lines.append("")
-            paragraph = self._section_text_with_markup(section, segments, "md")
+            paragraph = clean_human_text(
+                self._section_text_with_markup(section, segments, "md"),
+                glossary=DEFAULT_GLOSSARY,
+            )
             lines.append(paragraph)
             if section["quotes"]:
                 lines.append("")
                 lines.append("### Citations clés")
                 for quote in section["quotes"]:
-                    lines.append(f"> {quote}")
+                    quote_text = clean_human_text(quote, glossary=DEFAULT_GLOSSARY)
+                    lines.append(f"> {quote_text}")
             lines.append("")
-        _write_utf8(path, "\n".join(lines).strip() + "\n")
+        normalized_lines = [normalize_markdown_line(line, glossary=DEFAULT_GLOSSARY) for line in lines]
+        _write_utf8(path, "\n".join(normalized_lines).strip() + "\n")
 
     def _write_srt_vtt(self, path: Path, segments: List[Dict], fmt: str) -> None:
         separator = "," if fmt == "srt" else "."
@@ -349,7 +355,10 @@ class Exporter:
             title = section.get("auto_title") or section.get("title") or "Section"
             lines.append(f"{title} ({timestamp})")
             lines.append("")
-            paragraph = self._section_text_with_markup(section, segments, "clean_txt")
+            paragraph = clean_human_text(
+                self._section_text_with_markup(section, segments, "clean_txt"),
+                glossary=DEFAULT_GLOSSARY,
+            )
             lines.append(paragraph)
             lines.append("")
         text = "\n".join(lines).strip() + "\n"
