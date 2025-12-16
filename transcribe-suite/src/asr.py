@@ -4,10 +4,10 @@ import os
 import time
 from collections import Counter, deque
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from utils import PipelineError, detect_language, read_json, resolve_runtime_device, sanitize_whisper_text, write_json
 
@@ -29,6 +29,16 @@ class SegmentJob:
     output_path: Path
     status: str = "PENDING"
     retries: int = 0
+
+
+@dataclass
+class WorkerPlan:
+    count: int
+    source: str
+    requested: Optional[int]
+    note: Optional[str] = None
+    clamped_from: Optional[int] = None
+    clamp_notes: List[str] = field(default_factory=list)
 
 
 _WORKER_MODEL: Optional[WhisperModel] = None
@@ -183,7 +193,7 @@ class ASRProcessor:
         self.load_model()
 
     def estimate_worker_count(self) -> int:
-        return self._resolve_worker_count()
+        return self._resolve_worker_count().count
 
     def run(
         self,
@@ -212,6 +222,7 @@ class ASRProcessor:
         if not pending:
             self.logger.info("ASR parallèle: rien à faire (tous les segments sont DONE)")
             resolved_lang = self._resolve_language([], requested_lang, detect_lang)
+            idle_plan = self._resolve_worker_count(len(jobs))
             metrics_payload = self._write_metrics(
                 work_dir,
                 {
@@ -220,7 +231,7 @@ class ASRProcessor:
                     "segments_processed": 0,
                     "segments_skipped": len(jobs),
                     "segments_failed": [],
-                    "worker_count": self._resolve_worker_count(),
+                    "worker_count": idle_plan.count,
                     "retry_events": 0,
                     "duration_sec": 0.0,
                     "status": "ok",
@@ -236,7 +247,8 @@ class ASRProcessor:
                 "metrics": metrics_payload,
             }
 
-        worker_count = self._resolve_worker_count()
+        worker_plan = self._resolve_worker_count(len(pending))
+        worker_count = worker_plan.count
         decoder_cfg = self._decoder_options(initial_prompt)
         worker_env = self._blas_env()
         model_opts = {
@@ -250,7 +262,14 @@ class ASRProcessor:
         results: List[Dict[str, Any]] = []
         queue = deque(pending)
         inflight = {}
-        self.logger.info("ASR parallèle: %d segments à traiter (%d workers)", len(pending), worker_count)
+        plan_suffix = self._format_worker_plan(worker_plan)
+        self.logger.info(
+            "ASR parallèle: segments=%d, device=%s, workers=%d%s",
+            len(pending),
+            self.asr_device,
+            worker_count,
+            plan_suffix,
+        )
         start_time = time.time()
         processed = 0
         retry_events = 0
@@ -439,14 +458,32 @@ class ASRProcessor:
             return None
         return sanitized
 
-    def _resolve_worker_count(self) -> int:
-        limit = int(self.asr_cfg.get("max_workers", 8))
+    def _resolve_worker_count(self, segment_count: int = 0) -> WorkerPlan:
+        segments = max(1, int(segment_count or 0))
+        requested, source = self._requested_worker_setting()
+        note = None
+        if requested is None:
+            requested, note = self._auto_worker_target(segments)
+            source = "auto"
+        try:
+            initial = max(1, int(requested))
+        except (TypeError, ValueError) as exc:  # pragma: no cover - validation amont
+            raise PipelineError("Impossible de déterminer le parallélisme ASR") from exc
+        resolved = initial
+        clamp_notes: List[str] = []
+        resolved = self._clamp_workers(resolved, segments, f"segments={segments}", clamp_notes)
         env_limit = self._env_thread_ceiling()
-        ceiling = min(limit, env_limit) if env_limit else limit
-        physical = self._physical_cores()
-        logical = os.cpu_count() or 1
-        target = physical or logical
-        return max(1, min(ceiling, target))
+        resolved = self._clamp_workers(resolved, env_limit, f"env={env_limit}", clamp_notes)
+        core_limit = self._physical_cores() or (os.cpu_count() or None)
+        resolved = self._clamp_workers(resolved, core_limit, f"cores={core_limit}", clamp_notes)
+        return WorkerPlan(
+            count=resolved,
+            source=source,
+            requested=initial,
+            note=note,
+            clamped_from=initial if clamp_notes else None,
+            clamp_notes=clamp_notes,
+        )
 
     def _physical_cores(self) -> Optional[int]:
         try:
@@ -467,6 +504,88 @@ class ASRProcessor:
             if parsed > 0:
                 return parsed
         return None
+
+    def _requested_worker_setting(self) -> Tuple[Optional[int], str]:
+        if "_workers_source" in self.asr_cfg:
+            source = self.asr_cfg.get("_workers_source", "cli")
+        else:
+            source = "config"
+        raw_value = self.asr_cfg.get("workers")
+        if raw_value is None:
+            raw_value = self.asr_cfg.get("max_workers")
+            source = "legacy" if raw_value is not None else source
+        if raw_value is None:
+            return None, "auto"
+        if isinstance(raw_value, str):
+            token = raw_value.strip().lower()
+            if token == "auto":
+                return None, "auto"
+            try:
+                raw_value = int(token)
+            except ValueError as exc:
+                raise PipelineError(f"Valeur asr.workers invalide: {raw_value}") from exc
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise PipelineError(f"Valeur asr.workers invalide: {raw_value}") from exc
+        if value <= 0:
+            raise PipelineError("asr.workers doit être >= 1")
+        return value, source
+
+    def _auto_worker_target(self, segments: int) -> Tuple[int, str]:
+        device = str(self.asr_device or "auto").lower()
+        if "cuda" in device:
+            vram_gb = self._gpu_vram_gb()
+            cap = 3 if vram_gb and vram_gb >= 20 else 2
+            note = "cuda auto"
+            if vram_gb:
+                note = f"{note} (~{vram_gb:.1f}GB VRAM)"
+            workers = max(1, min(cap, segments))
+            return workers, note
+        logical = os.cpu_count() or 1
+        cpu_cap = max(1, logical // 2)
+        workers = max(1, min(cpu_cap, segments))
+        return workers, "cpu auto"
+
+    def _gpu_vram_gb(self) -> Optional[float]:
+        try:
+            import torch  # type: ignore
+        except ImportError:  # pragma: no cover - CPU only
+            return None
+        try:
+            if not torch.cuda.is_available():
+                return None
+            device_index = torch.cuda.current_device()
+            props = torch.cuda.get_device_properties(device_index)
+            return props.total_memory / (1024**3)
+        except Exception:
+            return None
+
+    def _clamp_workers(self, current: int, limit: Optional[int], label: str, notes: List[str]) -> int:
+        if not limit:
+            return current
+        if current <= limit:
+            return current
+        notes.append(label)
+        return limit
+
+    def _format_worker_plan(self, plan: WorkerPlan) -> str:
+        parts: List[str] = []
+        if plan.source == "cli":
+            parts.append("cli override")
+        elif plan.source == "config":
+            parts.append("config")
+        elif plan.source == "legacy":
+            parts.append("legacy max_workers")
+        else:
+            parts.append("auto")
+        if plan.note:
+            parts.append(plan.note)
+        if plan.clamp_notes:
+            clamp_detail = ", ".join(plan.clamp_notes)
+            prefix = f"clamped from {plan.clamped_from}"
+            parts.append(f"{prefix} ({clamp_detail})")
+        return f" ({', '.join(parts)})" if parts else ""
 
     def _blas_env(self) -> Dict[str, str]:
         env: Dict[str, str] = {}

@@ -55,7 +55,7 @@ asr:
   word_timestamps: false
   condition_on_previous_text: false
   no_speech_threshold: 0.6
-  max_workers: 8
+  workers: auto
   max_retries: 2
 
 align:

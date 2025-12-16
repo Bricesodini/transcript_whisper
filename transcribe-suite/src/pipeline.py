@@ -93,7 +93,18 @@ def parse_args():
     parser.add_argument("--chapters-min-duration", type=float, dest="chapters_min_duration", help="Soft min duration (s) pour forcer les chapitres")
     parser.add_argument("--compute-type", dest="compute_type", help="Override faster-whisper compute_type (int8/float16/auto)")
     parser.add_argument("--chunk-length", dest="chunk_length", type=float, help="Override chunk_length (s) pour Faster-Whisper")
-    parser.add_argument("--asr-workers", dest="asr_workers", type=int, help="Override max_workers ASR parallèles")
+    parser.add_argument(
+        "--asr-workers",
+        dest="asr_workers",
+        type=int,
+        help="Force le parallélisme ASR (>=1, sinon auto)",
+    )
+    parser.add_argument(
+        "--asr-parallelism",
+        dest="asr_workers",
+        type=int,
+        help="Alias de --asr-workers",
+    )
     parser.add_argument("--vad", dest="vad_filter", action="store_true", help="Force le VAD interne Faster-Whisper")
     parser.add_argument("--no-vad", dest="vad_filter", action="store_false", help="Désactive le VAD interne Faster-Whisper")
     parser.add_argument("--condition-off", dest="condition_off", action="store_true", help="Désactive condition_on_previous_text pour l'ASR")
@@ -182,8 +193,8 @@ class PipelineRunner:
         run_name = f"{self.media_path.stem}_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.logger = setup_logger(self.global_log_dir, run_name, log_level=self.log_level)
         local_log_path = self.local_log_dir / f"{run_name}.log"
+        local_log_path.parent.mkdir(parents=True, exist_ok=True)
         if self.global_log_dir.resolve() != self.local_log_dir.resolve():
-            local_log_path.parent.mkdir(parents=True, exist_ok=True)
             extra_handler = logging.FileHandler(local_log_path, encoding="utf-8")
             extra_handler.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
             extra_handler.setLevel(logging.DEBUG)
@@ -316,7 +327,10 @@ class PipelineRunner:
         if args.chunk_length is not None:
             asr_cfg["chunk_length"] = float(args.chunk_length)
         if args.asr_workers is not None:
-            asr_cfg["max_workers"] = max(1, int(args.asr_workers))
+            if args.asr_workers <= 0:
+                raise PipelineError("--asr-workers doit être >= 1")
+            asr_cfg["workers"] = int(args.asr_workers)
+            asr_cfg["_workers_source"] = "cli"
         if args.vad_filter is not None:
             asr_cfg["vad_filter"] = bool(args.vad_filter)
         if getattr(args, "condition_off", False):
@@ -352,7 +366,7 @@ class PipelineRunner:
             "paths": ["work_dir", "exports_dir", "logs_dir"],
             "defaults": ["lang", "model", "export_formats"],
             "segmenter": ["segment_length", "overlap", "manifest_name"],
-            "asr": ["device", "beam_size", "no_speech_threshold", "max_workers"],
+            "asr": ["device", "beam_size", "no_speech_threshold"],
             "diarization": ["max_speakers", "min_speaker_turn"],
             "align": ["language"],
             "export": ["low_confidence"],
@@ -368,6 +382,9 @@ class PipelineRunner:
                     raise PipelineError(f"Configuration stricte: '{section}.{key}' manquant")
         if missing:
             raise PipelineError(f"Configuration stricte: sections manquantes: {', '.join(missing)}")
+        asr_cfg = self.config.get("asr", {})
+        if not any(key in asr_cfg for key in ("workers", "max_workers")):
+            raise PipelineError("Configuration stricte: 'asr.workers' (ou legacy max_workers) manquant")
         defaults = self.config.get("defaults", {})
         if defaults.get("detect_language", False):
             raise PipelineError("Mode strict: detect_language doit être désactivé")

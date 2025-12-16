@@ -51,7 +51,7 @@ asr:
   condition_on_previous_text: false
   chunk_length: 20.0
   no_speech_threshold: 0.6
-  max_workers: 2
+  workers: auto
   max_retries: 2
   initial_prompt: null
 

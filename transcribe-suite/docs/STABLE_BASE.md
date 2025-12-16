@@ -21,7 +21,7 @@ Le fichier `requirements.lock` capture exactement ces versions. Le script `bin/e
 
 - Segmentation: fenêtres 75 s, overlap 8 s, mono 16 kHz.
 - Prétraitement: loudnorm + mono, VAD désactivée.
-- ASR: Faster-Whisper `large-v3`, `beam_size=1`, `best_of=1`, `temperature={0.0,0.2}`, `no_speech_threshold=0.6`, `max_workers=8`, `device=auto`.
+- ASR: Faster-Whisper `large-v3`, `beam_size=1`, `best_of=1`, `temperature={0.0,0.2}`, `no_speech_threshold=0.6`, `workers=auto` (2 sur CUDA, 3 si VRAM ≥ 20 GB, sinon `≈cpu/2`), `device=auto`.
 - Diarisation par défaut: mode monologue (`max_speakers=1`, `min_speaker_turn=1.3`).
 - Alignement: WhisperX forcé en `fr`.
 - Exports stricts: `.md`, `.json`, `.vtt` + `.low_confidence.csv`.

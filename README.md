@@ -243,7 +243,7 @@ bin/run.sh run \
 
 | Option | Description | Exemple |
 | ------ | ----------- | ------- |
-| `--asr-workers` | Nombre maximal de workers Faster-Whisper parallèles (<= segments). | `--asr-workers 6` couplé à `ASR_THREADS`. |
+| `--asr-workers` / `--asr-parallelism` | Force le parallélisme ASR (>=1). Sans override, `asr.workers:auto` choisit sagement 1–3 workers sur GPU et ≈50 % des cœurs sur CPU. | `--asr-workers 2` sur une 3090 si besoin spécifique. |
 | `--compute-type` | Force `int8`, `float16`, `auto` pour Faster-Whisper. | `--compute-type int8` recommandé sur Apple Silicon. |
 | `--chunk-length` | Durée (s) des morceaux traités par Faster-Whisper. | `--chunk-length 20` pour long média stable. |
 | `--vad` / `--no-vad` | Active/désactive le VAD interne Faster-Whisper. | `--vad` pour couper le bruit d’ambiance permanent. |
@@ -255,6 +255,8 @@ bin/run.sh run \
 | `--export-parallel` / `--export-serial` | Détermine si les exports tournent en multi-thread (défaut config). | `--export-serial` si disque lent / collisions I/O. |
 
 > Astuce : `bin/run.sh dry-run ... --verbose` récapitule tous les paramètres effectifs (profil + overrides) avant d’allumer les modèles. Servez-vous-en pour documenter une recette partagée.
+
+> Par défaut `asr.workers: auto` évite les déboires sur GPU unique : 2 workers sur CUDA (3 si VRAM ≥ 20 GB comme une RTX 3090), sinon `min(len(segments), cpu_count/2)` sur CPU/Metal. Toute demande explicite (`--asr-workers` ou `asr.workers: 4`) est clampée et logguée si elle dépasse les limites (segments, threads env, cœurs physiques).
 
 ## 🗂️ Arborescence de travail
 
@@ -369,6 +371,9 @@ pip install --extra-index-url https://download.pytorch.org/whl/cu124 -r requirem
 cd /d/02_dev/scripts/transcribe-suite/transcribe-suite
 PYTHON=../.venv/Scripts/python.exe ./bin/env_check.sh
 ```
+
+> **Note RTX 3090**  
+> Les scripts batch Windows (`bin\transcribe_mono.bat`, `bin\transcribe_multi.bat`, `bin\transcribe_share.bat`) gardent l’ASR en mode auto par défaut, à l’exception de `transcribe_mono.bat` qui force `--asr-workers 2` pour garantir la stabilité et éviter une saturation GPU sur RTX 3090. Les exécutions via CLI directe ou scripts Unix restent sur la logique auto intelligente décrite plus haut.
 
 #### DLL CUDA installées via pip (Windows uniquement)
 
@@ -582,7 +587,7 @@ bin/run.sh export --export-parallel --export md,json,vtt,jsonl
 
 Checklist rapide :
 
-1. ASR ➜ `source bin/asr_env.sh`, `--compute-type int8`, `--chunk-length 20`, `--asr-workers 8`.
+1. ASR ➜ `source bin/asr_env.sh`, `--compute-type int8`, `--chunk-length 20` (optionnellement `--asr-workers N` si vous ne voulez pas du mode auto).
 2. ALIGN ➜ `source bin/post_env.sh`, `--align-workers 4`, `--align-batch 16`, `--speech-only`.
 3. DIAR ➜ `--diar-device cpu`, `--seg-batch 12`, `--emb-batch 12`, `--num-speakers 2`, `--speech-mask`.
 4. EXPORT ➜ `--export-parallel`, `--export md,json,vtt,jsonl`.
@@ -629,7 +634,7 @@ asr:
   temperature_fallback: 0.2
   condition_on_previous_text: false
   no_speech_threshold: 0.6
-  max_workers: 10
+  workers: auto          # auto | entier >=1
   max_retries: 2
 
 languages:

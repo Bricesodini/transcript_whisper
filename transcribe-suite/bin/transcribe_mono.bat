@@ -58,6 +58,7 @@ for %%B in ("%SAFE%") do set "SAFE_BASE=%%~nB"
 REM --- RUN PIPELINE --------------------------------------------------
 call "%RUN_BAT%" run ^
   --config "%ROOT%\configs\base_stable.yaml" ^
+  --asr-workers 2 ^
   --input "%SRC%" ^
   --mode mono ^
   --chunk-length 20 ^
