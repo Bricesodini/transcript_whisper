@@ -3,6 +3,7 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import os
 import platform
 import subprocess
 import sys
@@ -216,6 +217,8 @@ class PipelineRunner:
         self.outputs_cfg = config.get("outputs", {})
         self.numbers_cfg = config.get("numbers", {})
         self.typography_cfg = config.get("typography", {})
+        structure_cfg = config.get("structure", {})
+        self.structure_enabled = structure_cfg.get("enabled", True) is not False
         self.post_state_path = self.work_dir / "post_state.json"
         self.polish_outputs_enabled = bool(getattr(args, "polish_outputs", False))
         self.post_state = self._load_post_state()
@@ -258,6 +261,7 @@ class PipelineRunner:
         self.merged_info: Optional[Dict[str, Any]] = None
         self.diarization_result: Optional[Dict[str, Any]] = None
         self.align_info: Optional[Dict[str, Any]] = None
+        self.last_artifacts: Optional[Dict[str, Path]] = None
         self.post_info: Optional[Dict[str, Any]] = None
 
         self.logger.info("=== Transcribe Suite ===")
@@ -650,13 +654,18 @@ class PipelineRunner:
                 chunk_low_threshold=getattr(self.chunker, "low_span_threshold", 0.1),
                 logger=self.logger,
             )
-            if summary:
-                self.logger.info(
-                    "Polish des exports terminé (%d phrases / %d chunks / %d paragraphes).",
-                    summary.get("clean_entries", 0),
-                    summary.get("chunk_entries", 0),
-                    summary.get("paragraphs", 0),
-                )
+            if not summary:
+                return
+            if summary.get("status") == "skipped":
+                reason = summary.get("reason") or "skipped"
+                self.logger.warning("Polish des exports ignoré (%s).", reason)
+                return
+            self.logger.info(
+                "Polish des exports terminé (%d phrases / %d chunks / %d paragraphes).",
+                summary.get("clean_entries", 0),
+                summary.get("chunk_entries", 0),
+                summary.get("paragraphs", 0),
+            )
         except Exception:
             self.logger.exception("Échec du polish final (--polish-outputs).")
 
@@ -1119,27 +1128,33 @@ class PipelineRunner:
         missing.extend(str(d) for d in required_dirs if not d.exists())
         if missing:
             raise PipelineError(f"Mode strict: artefacts manquants {missing}")
-        expected_exports = {
-            self.out_dir / f"{stem}.md",
-            self.out_dir / f"{stem}.json",
-            self.out_dir / f"{stem}.vtt",
-            self.out_dir / f"{stem}.low_confidence.csv",
-            self.out_dir / f"{stem}.chapters.json",
-        }
-        for path in expected_exports:
-            if not path.exists():
-                raise PipelineError(f"Mode strict: export absent {path}")
-        if self.strict:
-            existing = {p.name for p in self.out_dir.glob(f"{stem}.*")}
-            allowed = {p.name for p in expected_exports}
-            extra = existing - allowed
-            if extra:
-                raise PipelineError(f"Mode strict: exports non attendus {', '.join(sorted(extra))}")
+        if not self.strict:
+            return
+
+        required_exports: List[Path] = []
+        for fmt in self.export_formats or []:
+            fmt_key = str(fmt).strip().lower()
+            if not fmt_key:
+                continue
+            required_exports.append(self.out_dir / f"{stem}.{fmt_key}")
+        if self.structure_enabled:
+            required_exports.append(self.out_dir / f"{stem}.chapters.json")
+        if getattr(self.exporter, "low_conf_csv_enabled", False):
+            csv_override = getattr(self.exporter, "low_conf_csv_output", None)
+            if csv_override:
+                csv_path = Path(csv_override)
+            else:
+                csv_path = self.out_dir / f"{stem}.low_confidence.csv"
+            required_exports.append(csv_path)
+        missing_exports = [str(path) for path in required_exports if not path.exists()]
+        if missing_exports:
+            raise PipelineError(f"Mode strict: exports requis manquants {missing_exports}")
 
     def finalize_run(self, success: bool, error: Optional[str]) -> None:
         end_ts = time.time()
         self.run_stats["success"] = success
         self.run_stats["error"] = error
+        exports_map = {name: str(path) for name, path in (self.last_artifacts or {}).items()}
         manifest = {
             "input": str(self.media_path),
             "input_sha256": self.input_hash,
@@ -1156,9 +1171,20 @@ class PipelineRunner:
             "environment": self._collect_versions(),
             "status": "ok" if success else "failed",
             "error": error,
+            "doc_name": self.media_path.stem,
+            "work_dir": str(self.work_dir),
+            "export_dir": str(self.out_dir),
+            "exports": sorted(exports_map.keys()),
+            "export_paths": exports_map,
         }
         run_manifest_path = self.local_log_dir / "run_manifest.json"
-        write_json(run_manifest_path, manifest)
+        tmp_manifest_path = run_manifest_path.with_suffix(".tmp")
+        write_json(tmp_manifest_path, manifest)
+        try:
+            os.replace(tmp_manifest_path, run_manifest_path)
+        except OSError:
+            # best-effort fallback
+            write_json(run_manifest_path, manifest)
         self._update_pipeline_metrics(manifest)
 
     def _collect_versions(self) -> Dict[str, str]:

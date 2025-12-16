@@ -12,6 +12,7 @@ class Structurer:
         self.cfg = config.get("structure", {})
         self.trim_titles = self.cfg.get("trim_section_titles", False)
         self.title_case = str(self.cfg.get("title_case", "none")).lower()
+        self._title_case_warned = False
         self.enable_titles = bool(self.cfg.get("enable_titles", True))
         soft_min = self.cfg.get("soft_min_duration")
         try:
@@ -106,10 +107,11 @@ class Structurer:
         raw_title = self._title_from_text(text)
         if self.trim_titles:
             raw_title = textwrap.shorten(raw_title, width=80, placeholder="…")
-        if self.title_case == "sentence" and raw_title:
+        if raw_title and self.title_case in {"sentence", "title"}:
+            if self.title_case == "title" and not self._title_case_warned:
+                self.logger.info("structure.title_case='title' n'applique plus Title Case, utilisation du mode phrase.")
+                self._title_case_warned = True
             raw_title = raw_title[0].upper() + raw_title[1:]
-        elif self.title_case == "title":
-            raw_title = raw_title.title()
         return raw_title or "Section"
 
     def _segment_sentences(self, segment: Dict) -> List[Dict]:

@@ -1,13 +1,13 @@
+import inspect
 import os
 from pathlib import Path
 from typing import Dict, List
-
-import torch
 
 from utils import (
     PipelineError,
     compute_post_threads,
     configure_torch_threads,
+    resolve_runtime_device,
     read_json,
     sanitize_whisper_text,
     write_json,
@@ -27,11 +27,13 @@ class Aligner:
         self.logger = logger
         self.cfg = config.get("align", {})
         requested_device = self.cfg.get("device", config.get("asr", {}).get("device", "auto"))
-        self.device = self._resolve_device(requested_device)
+        self.device = resolve_runtime_device(requested_device, logger=self.logger, label="Align")
         self._cache = {}
         self.max_workers = max(1, int(self.cfg.get("workers", 4) or 4))
         self.batch_size = max(0, int(self.cfg.get("batch_size", 0) or 0))
         self.speech_only = bool(self.cfg.get("speech_only", False))
+        self._align_params_cache = None
+        self._align_callable = None
 
     def prewarm(self, language: str) -> None:
         lang = language or "en"
@@ -87,59 +89,92 @@ class Aligner:
         aligned_path = work_dir / "03_aligned_whisperx.json"
         if aligned_path.exists() and not force:
             payload = read_json(aligned_path)
-            self.logger.info("Alignement WhisperX (cache) ➜ %s", aligned_path)
+            self.logger.info("Alignement WhisperX (cache) -> %s", aligned_path)
             return {
                 "segments": payload.get("segments", []),
                 "language": payload.get("language", language),
                 "path": aligned_path,
+                "align_status": payload.get("align_status", "cache"),
             }
+
         align_model, metadata = self._load_align_model(language)
         diar_segments = diarization_result.get("segments", []) if diarization_result else []
         source_segments = asr_result.get("segments", [])
         segments_for_align = self._filter_speech_segments(source_segments, diar_segments)
         if segments_for_align:
-            self.logger.info("🔍 AVANT WhisperX align: %s", repr(segments_for_align[0].get("text", "")[:80]))
-        align_kwargs = {"device": self.device}
+            self.logger.info("AVANT WhisperX align: %s", repr(segments_for_align[0].get("text", "")[:80]))
+
+        requested_kwargs = {"device": self.device}
         if self.max_workers:
-            align_kwargs["num_workers"] = self.max_workers
+            requested_kwargs["num_workers"] = self.max_workers
         if self.batch_size:
-            align_kwargs["batch_size"] = self.batch_size
-        aligned = self._invoke_align(segments_for_align, align_model, metadata, audio_path, align_kwargs)
+            requested_kwargs["batch_size"] = self.batch_size
+        align_kwargs, dropped_kwargs = self._filter_align_kwargs(requested_kwargs)
+        if dropped_kwargs:
+            self.logger.info("Kwargs WhisperX non supportes ignores: %s", ", ".join(dropped_kwargs))
+
+        align_error = None
+        align_status = "ok"
+        try:
+            aligned = self._invoke_align(segments_for_align, align_model, metadata, audio_path, align_kwargs)
+        except Exception as exc:  # pragma: no cover
+            self.logger.warning(
+                "WhisperX align a echoue (%s). Fallback: segments non alignes mot-a-mot.",
+                exc,
+            )
+            aligned = {
+                "segments": segments_for_align,
+                "language": language,
+            }
+            align_status = "skipped"
+            align_error = f"{exc.__class__.__name__}: {str(exc)[:200]}"
+
+        aligned["align_status"] = align_status
+        if align_error:
+            aligned["align_error"] = align_error
+        if dropped_kwargs:
+            aligned["align_filtered_kwargs"] = dropped_kwargs
+        aligned["align_device"] = self.device
+        if align_status == "skipped":
+            aligned.setdefault("reason", align_error or "whisperx_failed")
+
         aligned_segments = aligned.get("segments", [])
-        if aligned_segments:
-            self.logger.info("🔍 APRÈS WhisperX align: %s", repr(aligned_segments[0].get("text", "")[:80]))
-        for segment in aligned.get("segments", []):
+        if align_status == "ok" and aligned_segments:
+            self.logger.info("APRES WhisperX align: %s", repr(aligned_segments[0].get("text", "")[:80]))
+
+        for segment in aligned_segments:
             if "text" in segment:
-                self.logger.info("🔍 Avant sanitize align: %s", repr(segment["text"][:80]))
+                self.logger.info("Avant sanitize align: %s", repr(segment["text"][:80]))
                 segment["text"] = sanitize_whisper_text(segment["text"])
-                self.logger.info("✅ Après sanitize align: %s", repr(segment["text"][:80]))
+                self.logger.info("Apres sanitize align: %s", repr(segment["text"][:80]))
             for word in segment.get("words", []):
                 if "word" in word:
                     word["word"] = sanitize_whisper_text(word["word"])
+
         self._assign_speakers(aligned.get("segments", []), diar_segments)
         aligned.setdefault("language", language)
         aligned_path.parent.mkdir(parents=True, exist_ok=True)
         write_json(aligned_path, aligned)
+
         log_path = work_dir / "logs" / "align.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("w", encoding="utf-8") as handle:
-            handle.write(f"Alignement WhisperX OK ({len(aligned_segments)} segments)\n")
-        return {"segments": aligned.get("segments", []), "language": language, "path": aligned_path}
+            message = f"Alignement WhisperX {align_status.upper()} ({len(aligned_segments)} segments)"
+            if align_error:
+                message += f" - {align_error}"
+            handle.write(message + "\n")
 
-    def _resolve_device(self, requested: str) -> str:
-        req = (requested or "auto").lower()
-        if req == "auto":
-            if torch.cuda.is_available():
-                return "cuda"
-            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                return "mps"
-            return "cpu"
-        if req == "metal":
-            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                return "mps"
-            self.logger.warning("Device 'metal' indisponible, repli sur CPU.")
-            return "cpu"
-        return req
+        result = {
+            "segments": aligned.get("segments", []),
+            "language": language,
+            "path": aligned_path,
+            "align_status": align_status,
+        }
+        if align_error:
+            result["align_error"] = align_error
+        if dropped_kwargs:
+            result["align_filtered_kwargs"] = dropped_kwargs
+        return result
 
     def _thread_budget(self) -> int:
         value = os.environ.get("POST_THREADS")
@@ -184,20 +219,56 @@ class Aligner:
         return filtered
 
     def _invoke_align(self, segments, align_model, metadata, audio_path, kwargs):
+        align_fn = self._get_align_callable()
+        return align_fn(
+            segments,
+            align_model,
+            metadata,
+            str(audio_path),
+            **kwargs,
+        )
+
+    def _filter_align_kwargs(self, kwargs: Dict):
+        allowed = self._allowed_align_params()
+        if not allowed:
+            return kwargs, []
+        filtered = {}
+        dropped = []
+        for key, value in kwargs.items():
+            if key in allowed:
+                filtered[key] = value
+            else:
+                dropped.append(key)
+        return filtered, dropped
+
+    def _allowed_align_params(self) -> set:
+        if self._align_params_cache is not None:
+            return self._align_params_cache
+        allowed = set()
+        if whisperx is None:
+            self._align_params_cache = allowed
+            return allowed
         try:
-            return whisperx.align(
-                segments,
-                align_model,
-                metadata,
-                str(audio_path),
-                **kwargs,
-            )
-        except TypeError as exc:
-            lowered = str(exc).lower()
-            for key in ("num_workers", "batch_size"):
-                needle = key.replace("_", " ")
-                if key in kwargs and (needle in lowered or key in lowered):
-                    self.logger.warning("Option WhisperX '%s' non supportée ➜ ignorée", key)
-                    kwargs.pop(key, None)
-                    return self._invoke_align(segments, align_model, metadata, audio_path, kwargs)
-            raise
+            align_fn = self._get_align_callable()
+            sig = inspect.signature(align_fn)
+            allowed = set(sig.parameters.keys())
+        except Exception:
+            allowed = set()
+        self._align_params_cache = allowed
+        return allowed
+
+    def _get_align_callable(self):
+        if self._align_callable is not None:
+            return self._align_callable
+        if whisperx is None:
+            raise PipelineError("whisperx indisponible pour l'alignement")
+        func = None
+        align_module = getattr(whisperx, 'alignment', None)
+        if align_module is not None and hasattr(align_module, 'align'):
+            func = getattr(align_module, 'align')
+        elif hasattr(whisperx, 'align'):
+            func = whisperx.align
+        if func is None:
+            raise PipelineError("Version whisperx incompatible: fonction align introuvable")
+        self._align_callable = func
+        return func

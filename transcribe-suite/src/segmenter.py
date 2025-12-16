@@ -129,6 +129,7 @@ class Segmenter:
             raise PipelineError(f"Découpage segment échoué ({segment_path}): {exc}") from exc
 
     def _write_manifest(self, manifest_path: Path, rows: List[Dict]) -> None:
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
         with manifest_path.open("w", encoding="utf-8", newline="\n") as handle:
             writer = csv.DictWriter(handle, fieldnames=["index", "start_ms", "end_ms", "path", "status"])
             writer.writeheader()

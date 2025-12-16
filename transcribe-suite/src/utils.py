@@ -1,7 +1,9 @@
 import hashlib
+import io
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -15,6 +17,7 @@ import yaml
 import hashlib
 
 THREAD_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS")
+_UTF8_CONSOLE_STREAM = None
 
 
 class PipelineError(RuntimeError):
@@ -47,6 +50,78 @@ def configure_torch_threads(num_threads: int, interop_threads: int = 2) -> None:
         torch.set_num_interop_threads(max(1, int(interop_threads)))
     except Exception:
         pass
+
+
+def _cuda_available() -> bool:
+    try:
+        import torch  # type: ignore
+    except ImportError:
+        return False
+    try:
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
+def _mps_available() -> bool:
+    try:
+        import torch  # type: ignore
+    except ImportError:
+        return False
+    try:
+        backend = getattr(torch.backends, "mps", None)
+        return bool(backend and backend.is_available())
+    except Exception:
+        return False
+
+
+def resolve_runtime_device(
+    requested: Optional[str],
+    *,
+    logger=None,
+    label: str = "device",
+    platform_name: Optional[str] = None,
+) -> str:
+    normalized = str(requested or "auto").strip().lower()
+    system_name = (platform_name or platform.system() or "").lower()
+    cuda_ok = _cuda_available()
+    mps_ok = _mps_available()
+
+    def _log(choice: str, *, reason: Optional[str] = None, warn: bool = False) -> str:
+        if logger:
+            message = f"{label} utilisera {choice}"
+            if reason:
+                message += f" ({reason})"
+            log_fn = logger.warning if warn else logger.info
+            log_fn(message)
+        return choice
+
+    if normalized in {"", "auto"}:
+        if cuda_ok:
+            return _log("cuda")
+        if system_name != "windows" and mps_ok:
+            return _log("metal")
+        return _log("cpu")
+
+    if normalized == "cuda":
+        if cuda_ok:
+            return _log("cuda")
+        return _log("cpu", reason="cuda indisponible", warn=True)
+
+    if normalized in {"metal", "mps"}:
+        if system_name == "windows":
+            fallback = "cuda" if cuda_ok else "cpu"
+            return _log(fallback, reason="backend mps indisponible sur Windows", warn=True)
+        if mps_ok:
+            return _log("metal")
+        fallback = "cuda" if cuda_ok else "cpu"
+        return _log(fallback, reason="backend mps indisponible", warn=True)
+
+    if normalized == "cpu":
+        return _log("cpu")
+
+    # Unknown value: pass through but still log the choice for clarity.
+    return _log(normalized)
 
 
 def load_config(path: Path) -> Dict[str, Any]:
@@ -114,11 +189,46 @@ def setup_logger(log_dir: Path, run_name: str, log_level: str = "INFO") -> loggi
 
     level_name = str(log_level or "INFO").upper()
     console_level = getattr(logging, level_name, logging.INFO)
-    sh = logging.StreamHandler(sys.stdout)
+    stdout = ensure_utf8_console()
+    sh = logging.StreamHandler(stdout)
     sh.setFormatter(fmt)
     sh.setLevel(console_level)
     logger.addHandler(sh)
     return logger
+
+
+def ensure_utf8_console():
+    """Return stdout wrapped with UTF-8 encoding + replacement fallback."""
+    global _UTF8_CONSOLE_STREAM
+    if _UTF8_CONSOLE_STREAM:
+        return _UTF8_CONSOLE_STREAM
+    target = sys.stdout
+    try:
+        target.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except AttributeError:
+            pass
+        _UTF8_CONSOLE_STREAM = target
+        return target
+    except AttributeError:
+        try:
+            buffer = target.buffer  # type: ignore[attr-defined]
+        except AttributeError:
+            _UTF8_CONSOLE_STREAM = target
+            return target
+        wrapper = io.TextIOWrapper(buffer, encoding="utf-8", errors="replace")
+        _UTF8_CONSOLE_STREAM = wrapper
+        sys.stdout = wrapper  # type: ignore[assignment]
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except AttributeError:
+            try:
+                err_buffer = sys.stderr.buffer  # type: ignore[attr-defined]
+                sys.stderr = io.TextIOWrapper(err_buffer, encoding="utf-8", errors="replace")  # type: ignore[assignment]
+            except AttributeError:
+                pass
+        return wrapper
 
 
 def run_cmd(cmd: List[str], logger: logging.Logger, cwd: Optional[Path] = None) -> None:
@@ -143,6 +253,7 @@ def copy_to_clipboard(text: str, logger: logging.Logger) -> None:
 
 
 def write_json(path: Path, payload: Any, indent: int = 2) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=indent)
 
@@ -190,7 +301,7 @@ def sanitize_whisper_text(text: Any) -> str:
 
 
 def normalize_media_path(raw: Optional[Any]) -> Optional[str]:
-    """Clean paths coming from CLI/Shortcuts (handles stray quotes and '\ ' sequences)."""
+    """Clean paths coming from CLI/Shortcuts (handles stray quotes and '\\ ' sequences)."""
     if raw is None:
         return None
     if isinstance(raw, (list, tuple)):

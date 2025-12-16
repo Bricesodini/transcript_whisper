@@ -1,0 +1,100 @@
+@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+
+set "NET_IN=\\bricesodini\Savoirs\Transcriptions\input"
+set "NET_OUT=\\bricesodini\Savoirs\Transcriptions\output"
+set "NET_DONE=%NET_OUT%\_processed"
+
+set "BIN_DIR=%~dp0"
+set "RUN_BAT=%BIN_DIR%run.bat"
+
+for %%I in ("%BIN_DIR%..") do set "ROOT=%%~fI"
+
+set "STAGE=%ROOT%\share_stage"
+set "STAGE_MEDIA=%STAGE%\media"
+set "STAGE_LOGS=%STAGE%\logs"
+
+if not exist "%RUN_BAT%" (echo ERROR run.bat introuvable & goto FAIL)
+if not exist "%NET_IN%" (echo ERROR input introuvable & goto FAIL)
+if not exist "%NET_OUT%" (echo ERROR output introuvable & goto FAIL)
+
+if not exist "%NET_DONE%" mkdir "%NET_DONE%" >nul 2>&1
+if not exist "%STAGE_MEDIA%" mkdir "%STAGE_MEDIA%" >nul 2>&1
+if not exist "%STAGE_LOGS%" mkdir "%STAGE_LOGS%" >nul 2>&1
+
+set "SRC="
+for %%F in ("%NET_IN%\*.mp4" "%NET_IN%\*.wav" "%NET_IN%\*.mp3" "%NET_IN%\*.m4a") do (
+  if not defined SRC if exist "%%~fF" set "SRC=%%~fF"
+)
+
+if not defined SRC (
+  echo Aucun fichier a traiter
+  goto OK
+)
+
+for %%Z in ("%SRC%") do (
+  set "NAME=%%~nxZ"
+  set "BASE=%%~nZ"
+)
+
+echo Source : "%SRC%"
+
+REM === SAFE NAME via PowerShell (la seule méthode fiable) ===
+for /f "usebackq delims=" %%S in (`
+  powershell -NoProfile -Command ^
+  "$n='%NAME%'; $s=$n -replace '[^\p{L}\p{N}\.\-_ ]','_'; Write-Output $s"
+`) do set "SAFE=%%S"
+
+echo Safe   : "%SAFE%"
+
+set "LOCAL_MEDIA=%STAGE_MEDIA%\%SAFE%"
+copy /Y "%SRC%" "%LOCAL_MEDIA%" >nul
+if not exist "%LOCAL_MEDIA%" (
+  echo ERREUR copie locale
+  goto FAIL
+)
+
+for /f %%T in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss"') do set "TS=%%T"
+set "RUNLOG=%STAGE_LOGS%\%BASE%_%TS%.log"
+
+echo Lancement pipeline...
+call "%RUN_BAT%" run --no-strict --input "%LOCAL_MEDIA%" --lang auto --profile talkshow --export md,json,vtt > "%RUNLOG%" 2>&1
+if errorlevel 1 (
+  echo ERREUR pipeline
+  echo Voir log: "%RUNLOG%"
+  goto FAIL
+)
+
+set "WORK_ROOT=%ROOT%\work"
+set "WORK_DIR="
+for /f "delims=" %%D in ('dir /b /ad /o-d "%WORK_ROOT%"') do (
+  if not defined WORK_DIR set "WORK_DIR=%WORK_ROOT%\%%D"
+)
+
+if not defined WORK_DIR (
+  echo ERREUR dossier work introuvable
+  goto FAIL
+)
+
+set "DEST=%NET_OUT%\%BASE%"
+if not exist "%DEST%" mkdir "%DEST%" >nul
+
+xcopy /E /I /Y "%WORK_DIR%\*" "%DEST%\" >nul
+copy /Y "%RUNLOG%" "%DEST%\run_%TS%.log" >nul
+
+move /Y "%SRC%" "%NET_DONE%\%SAFE%" >nul
+
+echo OK -> "%DEST%"
+goto OK
+
+:FAIL
+echo.
+echo ECHEC - appuyez sur une touche
+pause >nul
+exit /b 1
+
+:OK
+echo.
+echo Termine - appuyez sur une touche
+pause >nul
+exit /b 0

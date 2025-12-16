@@ -1,14 +1,20 @@
-ctranslate2==4.6.1
+# Extra index requis pour les roues CUDA PyTorch
+--extra-index-url https://download.pytorch.org/whl/cu124
+
+ctranslate2==4.4.0
 faster-whisper==1.2.1
 huggingface-hub==0.36.0
 numpy==2.0.2
-onnxruntime==1.23.2
+onnxruntime-gpu==1.23.2 ; platform_system == "Windows"
+onnxruntime==1.23.2 ; platform_system != "Windows"
 protobuf==6.33.0
 pyannote.audio==3.4.0
 scipy==1.16.3
 soundfile==0.13.1
-torch==2.8.0
-torchaudio==2.8.0
+torch==2.6.0+cu124 ; platform_system == "Windows"
+torch==2.8.0 ; platform_system != "Windows"
+torchaudio==2.6.0+cu124 ; platform_system == "Windows"
+torchaudio==2.8.0 ; platform_system != "Windows"
 tqdm==4.67.1
 transformers==4.57.1
-whisperx==3.7.4
+whisperx==3.4.0

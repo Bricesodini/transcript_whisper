@@ -23,8 +23,11 @@ from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 SRC_DIR = ROOT_DIR / "src"
+TOOLS_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.append(str(SRC_DIR))
+if str(TOOLS_DIR) not in sys.path:
+    sys.path.append(str(TOOLS_DIR))
 
 from text_cleaning import DEFAULT_GLOSSARY, clean_human_text, normalize_markdown_block, normalize_markdown_line
 from validate_outputs import validate_export_bundle
@@ -272,10 +275,12 @@ def refresh_arte_outputs(
     aligned_path = work_dir / "05_polished.json"
     structure_path = work_dir / "structure.json"
     log = (logger.info if logger else print)
+    warn = (logger.warning if logger else print)
     log(f"[ARTE refresh] Indexation des mots ({aligned_path})")
     word_index = load_words(aligned_path)
     if not word_index.words:
-        raise RuntimeError("Aucun mot avec score trouvé, annulation.")
+        warn("ARTE refresh skipped: no word scores found")
+        return {"base_name": base_name, "status": "skipped", "reason": "no_word_scores"}
 
     log("[ARTE refresh] Mise à jour des sections")
     structure_data = json.loads(structure_path.read_text(encoding="utf-8"))
@@ -440,6 +445,7 @@ def refresh_arte_outputs(
         "clean_entries": len(clean_entries),
         "chunk_entries": len(chunk_entries),
         "paragraphs": len(paragraph_rows),
+        "status": "ok",
     }
 
 

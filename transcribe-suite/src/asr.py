@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from utils import PipelineError, detect_language, read_json, sanitize_whisper_text, write_json
+from utils import PipelineError, detect_language, read_json, resolve_runtime_device, sanitize_whisper_text, write_json
 
 try:
     from faster_whisper import WhisperModel
@@ -52,6 +52,7 @@ def _worker_log(message: str) -> None:
     if _WORKER_LOG_PATH is None:
         return
     try:
+        _WORKER_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with _WORKER_LOG_PATH.open("a", encoding="utf-8") as handle:
             handle.write(message.strip() + "\n")
     except OSError:
@@ -65,17 +66,10 @@ def _ensure_worker_model() -> WhisperModel:
     if WhisperModel is None:  # pragma: no cover
         raise RuntimeError(f"faster-whisper indisponible: {IMPORT_ERROR}")
     model_name = _WORKER_MODEL_OPTIONS.get("model_name", "large-v3")
-    device = _WORKER_MODEL_OPTIONS.get("device", "auto")
+    requested_device = _WORKER_MODEL_OPTIONS.get("device", "auto")
+    device = resolve_runtime_device(requested_device, logger=None, label="ASR worker")
     compute_type = _WORKER_MODEL_OPTIONS.get("compute_type", "auto")
-    try:
-        _WORKER_MODEL = WhisperModel(model_name, device=device, compute_type=compute_type)
-    except ValueError as exc:
-        msg = str(exc).lower()
-        if "unsupported device metal" in msg and device in ("auto", "metal"):
-            _worker_log("Device Metal indisponible ➜ fallback CPU")
-            _WORKER_MODEL = WhisperModel(model_name, device="cpu", compute_type=compute_type)
-        else:  # pragma: no cover
-            raise
+    _WORKER_MODEL = WhisperModel(model_name, device=device, compute_type=compute_type)
     return _WORKER_MODEL
 
 
@@ -167,6 +161,8 @@ class ASRProcessor:
         self.cfg = config
         self.model_name = config.get("defaults", {}).get("model", "large-v3")
         self.asr_cfg = config.get("asr", {})
+        requested_device = self.asr_cfg.get("device", "auto")
+        self.asr_device = resolve_runtime_device(requested_device, logger=self.logger, label="ASR")
         self._model: Optional[WhisperModel] = None
         self._batch_warned = False
 
@@ -175,18 +171,12 @@ class ASRProcessor:
             return self._model
         if WhisperModel is None:
             raise PipelineError(f"faster-whisper non disponible: {IMPORT_ERROR}")
-        device = self.asr_cfg.get("device", "auto")
         compute_type = self.asr_cfg.get("compute_type", "auto")
         self.logger.info("Chargement modèle Faster-Whisper (%s)", self.model_name)
         try:
-            self._model = WhisperModel(self.model_name, device=device, compute_type=compute_type)
+            self._model = WhisperModel(self.model_name, device=self.asr_device, compute_type=compute_type)
         except ValueError as exc:
-            msg = str(exc).lower()
-            if "unsupported device metal" in msg and device in ("auto", "metal"):
-                self.logger.warning("Metal indisponible ➜ repli CPU")
-                self._model = WhisperModel(self.model_name, device="cpu", compute_type=compute_type)
-            else:
-                raise
+            raise PipelineError(f"Chargement Faster-Whisper impossible: {exc}") from exc
         return self._model
 
     def ensure_model_cached(self) -> None:
@@ -251,7 +241,7 @@ class ASRProcessor:
         worker_env = self._blas_env()
         model_opts = {
             "model_name": self.model_name,
-            "device": self.asr_cfg.get("device", "auto"),
+            "device": self.asr_device,
             "compute_type": self.asr_cfg.get("compute_type", "auto"),
         }
         max_retries = int(self.asr_cfg.get("max_retries", 2))

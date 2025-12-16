@@ -24,6 +24,7 @@ def _normalize_text(text: str) -> str:
 
 def _write_utf8(path: Path, text: str) -> None:
     normalized = _normalize_text(text)
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="\n") as handle:
         handle.write(normalized)
 
@@ -373,6 +374,7 @@ class Exporter:
         rows = self._collect_low_conf_rows(segments, threshold)
         clusters = self._build_low_conf_clusters(rows) if rows else []
         outfile = Path(self.low_conf_csv_output) if self.low_conf_csv_output else out_dir / f"{base_name}.low_confidence.csv"
+        outfile.parent.mkdir(parents=True, exist_ok=True)
         outfile.parent.mkdir(parents=True, exist_ok=True)
         with outfile.open("w", encoding="utf-8", newline="\n") as handle:
             writer = csv.writer(handle)

@@ -8,6 +8,8 @@ from glossary import GlossaryManager
 from textnorm import TextNormalizer, join_text
 
 NBSP = "\u00A0"
+_FRENCH_PUNCT_GAP = re.compile(r"([.!?])([A-Za-z\u00C0-\u017F])")
+_MULTI_SPACE = re.compile(r"[ \t]{2,}")
 
 
 def _normalize_ellipsis(text: str) -> str:
@@ -27,13 +29,15 @@ def _ensure_terminal_punct(text: str) -> str:
     return stripped if re.search(r"[.!?…]$", stripped) else stripped + "."
 
 
-def _capitalize_start(text: str) -> str:
-    stripped = text.lstrip()
-    return stripped[:1].upper() + stripped[1:] if stripped else stripped
-
-
 def _capitalize_word(word: str) -> str:
     return word[:1].upper() + word[1:] if word else word
+
+
+def _fix_french_spacing(text: str) -> str:
+    if not text:
+        return text
+    updated = _FRENCH_PUNCT_GAP.sub(r"\1 \2", text)
+    return _MULTI_SPACE.sub(" ", updated)
 
 
 def _apply_replacements(text: str, replacements: List[List[str]]) -> str:
@@ -180,6 +184,7 @@ class Polisher:
             "reset_after": punct_cfg.get("reset_after", [".", "!", "?", "…"]),
             "soft_after": punct_cfg.get("soft_after", [",", ";", ":", " :"]),
         }
+        self.fix_french_spacing = bool(self.cfg.get("fix_french_spacing", True))
         self.audit_sample_size = max(1, int(self.cfg.get("audit_sample_size", 5)))
         self._report: Dict[str, Any] = {}
 
@@ -190,7 +195,7 @@ class Polisher:
         max_words = int(self.cfg.get("max_sentence_words", 18))
         join_gap_ms = int(self.cfg.get("join_short_segments_ms", 650))
         replacements = self.cfg.get("replacements", [])
-        norm_ellipsis = bool(self.cfg.get("normalize_ellipses", True))
+        norm_ellipsis = bool(self.cfg.get("normalize_ellipses", False))
         norm_quotes = bool(self.cfg.get("normalize_quotes", True))
         ensure_punct = bool(self.cfg.get("ensure_terminal_punct", True))
         sentence_case = bool(self.cfg.get("sentence_case", False))
@@ -241,15 +246,15 @@ class Polisher:
                 text = _normalize_ellipsis(text)
             if sentence_case:
                 text = _apply_sentence_case(text, combined_whitelist, canonical_map, self.punctuation_cfg)
-            else:
-                text = _capitalize_start(text)
             if ensure_punct:
                 text = _ensure_terminal_punct(text)
-            if norm_quotes and lang.startswith("fr"):
+            if self.fix_french_spacing and language.startswith("fr"):
+                text = _fix_french_spacing(text)
+            if norm_quotes and language.startswith("fr"):
                 text = _normalize_quotes_fr(text)
-            if enable_nbsp and lang.startswith("fr") and (fr_nbsp_before or fr_nbsp_after):
+            if enable_nbsp and language.startswith("fr") and (fr_nbsp_before or fr_nbsp_after):
                 text = _apply_nbsp_fr(text, fr_nbsp_before, fr_nbsp_after)
-            if normalize_lists and list_bullet_symbol and lang.startswith("fr"):
+            if normalize_lists and list_bullet_symbol and language.startswith("fr"):
                 text = _normalize_list_markers(text, str(list_bullet_symbol))
             text, split_count = self._sentence_split(text, max_words)
             if split_count:

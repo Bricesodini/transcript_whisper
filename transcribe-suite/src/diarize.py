@@ -19,6 +19,25 @@ except ImportError:  # pragma: no cover
     torch = None
 
 
+SAFE_GLOBALS = []
+
+try:
+    from torch.torch_version import TorchVersion  # type: ignore
+except Exception:
+    TorchVersion = None
+else:
+    SAFE_GLOBALS.append(TorchVersion)
+
+try:
+    from pyannote.audio.core.task import Specifications, Problem, Resolution  # type: ignore
+except Exception:
+    Specifications = None
+    Problem = None
+    Resolution = None
+else:
+    SAFE_GLOBALS.extend([Specifications, Problem, Resolution])
+
+
 class Diarizer:
     def __init__(self, config: Dict, logger):
         self.logger = logger
@@ -47,8 +66,55 @@ class Diarizer:
                 f"Définis la variable d'environnement {token_env}."
             )
         self.logger.info("Chargement du pipeline Pyannote (%s)", model_id)
+        if torch is not None and SAFE_GLOBALS:
+            try:
+                import torch.serialization as ts
+
+                if hasattr(ts, "add_safe_globals"):
+                    ts.add_safe_globals([cls for cls in SAFE_GLOBALS if cls])
+                    self.logger.info(
+                        "PyTorch safe_globals activés pour %s",
+                        ", ".join(cls.__name__ for cls in SAFE_GLOBALS if cls),
+                    )
+            except Exception as exc:  # pragma: no cover
+                self.logger.warning(
+                    "Impossible d'activer les safe_globals Pyannote (%s). "
+                    "Pour tout nouvel 'Unsupported global', ajoutez la classe concernée ici.",
+                    exc,
+                )
         pipeline = PyannotePipeline.from_pretrained(model_id, use_auth_token=token)
-        self._apply_device(pipeline)
+        device_obj = None
+        final_label = "cpu"
+        if torch is not None:
+            if torch.cuda.is_available():
+                device_obj = torch.device("cuda")
+            else:
+                hint = (self.device or "cpu")
+                try:
+                    device_obj = torch.device(hint)
+                except Exception:
+                    self.logger.warning("Device Pyannote invalide '%s' ➜ cpu", hint)
+                    device_obj = torch.device("cpu")
+        if device_obj is not None:
+            try:
+                pipeline.to(device_obj)
+                final_label = device_obj.type
+            except AttributeError:
+                self.logger.debug("Pipeline Pyannote sans support explicite .to(); device par défaut conservé.")
+                final_label = getattr(device_obj, "type", str(device_obj))
+            except Exception as exc:  # pragma: no cover
+                self.logger.warning(
+                    "Impossible de basculer Pyannote sur %s (%s) ➜ cpu",
+                    getattr(device_obj, "type", device_obj),
+                    exc,
+                )
+                if torch is not None:
+                    try:
+                        pipeline.to(torch.device("cpu"))
+                    except Exception as fallback_exc:  # pragma: no cover
+                        self.logger.warning("Fallback Pyannote sur cpu impossible (%s)", fallback_exc)
+                final_label = "cpu"
+        self.logger.info("Pyannote ➜ device %s", final_label)
         self._configure_batches(pipeline)
         self._apply_pipeline_params(pipeline)
         self._pipeline = pipeline
@@ -60,6 +126,7 @@ class Diarizer:
         diarization = pipeline(str(audio_path))
         diarization.uri = self._safe_uri(audio_path.stem)
         rttm_path = build_dir / "diarization.rttm"
+        rttm_path.parent.mkdir(parents=True, exist_ok=True)
         with rttm_path.open("w", encoding="utf-8") as handle:
             diarization.write_rttm(handle)
         segments: List[Dict] = []
@@ -78,19 +145,6 @@ class Diarizer:
         if max_speakers > 0:
             segments = self._limit_speakers(segments, max_speakers)
         return {"segments": segments, "rttm": rttm_path}
-
-    def _apply_device(self, pipeline: PyannotePipeline) -> None:
-        target = self._sanitize_device(self.device)
-        if target is None:
-            return
-        try:
-            pipeline.to(target)
-            self.logger.info("Pyannote ➜ device %s", target)
-        except AttributeError:
-            # versions très anciennes : pas de to()
-            self.logger.debug("Pipeline Pyannote sans support explicite .to(); device par défaut conservé.")
-        except Exception as exc:  # pragma: no cover
-            self.logger.warning("Impossible de basculer Pyannote sur %s (%s)", target, exc)
 
     def _configure_batches(self, pipeline: PyannotePipeline) -> None:
         if self.seg_batch and hasattr(pipeline, "segmentation"):

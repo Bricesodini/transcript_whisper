@@ -17,8 +17,10 @@ bin/run.sh dry-run --input "/chemin/vers/media.mp4" --lang auto
 
 # Vérification environnement (versions figées)
 source .venv/bin/activate
-bin/env_check.sh
+bin/env_check.sh   # sur Windows, utiliser bin\env_check.bat
 ```
+
+> **Windows** : utilisez `bin\run.bat` (ou `powershell -File bin\run.ps1 …`) pour lancer la pipeline sans dépendre de Bash.
 
 **Sorties** dans un dossier `TRANSCRIPT - <NomDuFichier>` créé à côté du média :
 
@@ -34,6 +36,8 @@ bin/env_check.sh
 - `.low_confidence.jsonl` (file d'attente pour relecture ciblée)
 - `.metrics.json` (tableau machine-readable pour log/graphes)
 - `.clean.final.txt` / `.final.md` / `.qa.json` (via le post-traitement optionnel ci-dessous)
+
+Les exports « livrables » restent `md/json/vtt` ; tous les autres fichiers appartiennent à la couche QA/RAG et doivent être présents mais ne bloquent plus le mode strict.
 
 👉 Référence complète du mode stable : `docs/STABLE_BASE.md` (versions, flags autorisés, procédures de reprise).
 
@@ -123,7 +127,7 @@ Options clés :
 
 **Pré-run recommandé**
 
-- `source .venv/bin/activate` puis `bin/env_check.sh` pour valider Python, ffmpeg et wheels pin.
+- `source .venv/bin/activate` puis `bin/env_check.sh` (ou `bin\env_check.bat` sous Windows) pour valider Python, ffmpeg et wheels pin.
 - `export PYANNOTE_TOKEN="hf_xxx"` (et presets `ASR_THREADS` / `POST_THREADS` si nécessaires).
 - `bin/run.sh dry-run --input "...mp4"` pour vérifier l’arborescence cible, les exports et l’état des artefacts existants.
 
@@ -161,8 +165,8 @@ Options clés :
 
 7. **Exports finaux (`export`)**  
    Commande : `bin/run.sh export --input "...mp4" --export txt,md,...`.  
-   Artefacts : dossier `TRANSCRIPT - <media>/` (formats demandés, `.chapters.json`, `.low_confidence.csv`).  
-   Contrôle : en mode strict, `_verify_artifacts` confirme la présence exacte de `.md/.json/.vtt`; `run_manifest.json` (dans `work/.../logs`) récapitule hash, durées, versions.
+   Artefacts : dossier `TRANSCRIPT - <media>/` (formats demandés) accompagné des fichiers QA (`.chapters.json`, `.low_confidence.csv`, `.metrics.json`, etc.).  
+   Contrôle : en mode strict, `_verify_artifacts` n'exige plus que les formats demandés + `chapters.json` (si le chapitrage tourne) + `low_confidence.csv` (si `csv_enabled=true`). Les autres artefacts QA sont tolérés. Le pointer `work/<media>/logs/run_manifest.json` expose `export_dir`, hash, durées, versions et la liste des exports.
 
 ---
 
@@ -313,7 +317,7 @@ pip install -r requirements.lock
 
 > Les versions sont figées dans `requirements.lock` pour garantir la reproductibilité (mêmes wheels ctranslate2/pyannote). Préfère toujours ce lock avant un run critique.
 
-**Vérification environnement (`bin/env_check.sh`)**
+**Vérification environnement (`bin/env_check.sh` / `bin\\env_check.bat`)**
 
 ```bash
 source .venv/bin/activate
@@ -328,7 +332,7 @@ bin/env_check.sh
 (extrait mis à jour)
 
 - faster-whisper 1.2.1 (CPU Apple Accelerate)
-- torch / torchaudio 2.8.0
+- torch / torchaudio 2.8.0 (CPU) / 2.6.0+cu124 (Windows + CUDA)
 - pyannote.audio 3.4.0
 - onnxruntime 1.23.2
 
@@ -336,6 +340,66 @@ bin/env_check.sh
 > `brew install ctranslate2` puis :  
 > `pip install --no-binary faster-whisper faster-whisper`  
 > Non packagé par défaut : privilégie la voie CPU si tu ne veux pas depanner Metal. Sans ctranslate2 Metal, Faster-Whisper bascule automatiquement sur CPU (voir logs). Les versions exactes sont loguées dans `run_manifest.json`.
+
+### Windows + CUDA (GPU Nvidia)
+
+- `requirements.txt` / `requirements.lock` installent automatiquement `torch` / `torchaudio` `+cu124` et `onnxruntime-gpu` quand `platform_system == "Windows"`.
+- `whisperx==3.4.0` est volontairement pin pour rester compatible avec les wheels PyTorch <= 2.6 (dernieres builds CUDA officielles Windows).
+- Utilise l'index PyTorch officiel lors de la cr?ation du venv :
+
+```bash
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install --upgrade pip
+pip install --extra-index-url https://download.pytorch.org/whl/cu124 -r requirements.lock
+```
+
+- Pour convertir un `.venv` d?j? install? en mode CPU :
+
+```bash
+.\.venv\Scripts\activate
+pip uninstall -y torch torchaudio onnxruntime onnxruntime-gpu
+pip install --upgrade pip
+pip install --extra-index-url https://download.pytorch.org/whl/cu124 -r requirements.lock
+```
+
+- Vérifie ton environnement en lançant `bin\env_check.bat` (il utilise automatiquement le venv courant). Si tu préfères rester en bash (Git Bash / WSL), conserve :
+
+```bash
+cd /d/02_dev/scripts/transcribe-suite/transcribe-suite
+PYTHON=../.venv/Scripts/python.exe ./bin/env_check.sh
+```
+
+#### DLL CUDA installées via pip (Windows uniquement)
+
+- Les packages `nvidia-cublas-cu12`, `nvidia-cudnn-cu12` et `nvidia-cuda-runtime-cu12` déposent toutes les DLL dans `.venv\Lib\site-packages\nvidia\<package>\bin`. `bin\run.bat` détecte automatiquement le venv (`..\..\.venv` par défaut, ou la valeur fournie dans `TS_VENV_DIR`) et préfixe `PATH` avec ces dossiers avant de lancer PowerShell. Aucun ajout manuel au PATH système n’est nécessaire.
+- Pour vérifier que tout est visible : `where cublasLt64_11.dll` (Cmd/PowerShell) ou `Get-ChildItem .venv\Lib\site-packages\nvidia\cublas\bin` dans ton venv. `bin\env_check.bat` échouera explicitement si une version attendue manque.
+- Symptôme d’un PATH incomplet : les logs Faster-Whisper contiennent `Could not locate cublasLt64_11.dll` puis `BrokenProcessPool` dès le stage ASR. Relance la commande via `bin\run.bat` (ou exporte `TS_VENV_DIR` si ton venv est ailleurs) pour que les DLL soient injectées à chaque exécution.
+- Ce flux reste 100 % pip : pas besoin d’installer un CUDA Toolkit système ni de jouer avec `nvcc`. Les wheels pin (torch 2.6.0+cu124, whisperx 3.4.0, ctranslate2 4.4.0, etc.) sont alignées avec ces DLL et loguées dans `work/<media>/logs/run_manifest.json`.
+
+- Pour traiter un m?dia situ? dans `\\bricesodini\Savoirs\Transcriptions\input` et recopier automatiquement la transcription (`TRANSCRIPT - <Nom>`) + les logs dans `\\bricesodini\Savoirs\Transcriptions\output`, utilise :
+
+```bat
+bin\transcribe_share.bat MonFichier.mp4 --lang auto --export txt,md,json
+```
+
+  - Argument 1 = nom du fichier dans `input` (ou chemin absolu).
+  - Les arguments suppl?mentaires sont transmis tels quels ? la CLI (`--lang`, `--export`, etc.).
+  - Après succès : `\\bricesodini\Savoirs\Transcriptions\output\<Nom>\TRANSCRIPT - <Nom>` contient les exports, `...\logs` reprend `work/<Nom>/logs`. Le batch lit désormais `work/<Nom>/logs/run_manifest.json` (`export_dir`) plutôt qu’un pattern `__tmp_*`.
+
+- Ensuite, force CUDA si besoin (sinon `auto` d?tectera la pr?sence du GPU) :
+
+```bash
+bin/run.sh run \
+  --input "media.mp4" \
+  --lang auto \
+  --asr-device cuda \
+  --compute-type float16 \
+  --diar-device cuda
+```
+
+`nvidia-smi` + `bin/env_check.sh` te confirmeront que `torch`, `onnxruntime-gpu` et Faster-Whisper (ctranslate2) voient bien le GPU.
+
 
 ---
 
@@ -361,6 +425,16 @@ bin/run.sh post --input "/chemin/vers/podcast.mp4"
 bin/run.sh export --input "/chemin/vers/podcast.mp4"
 bin/run.sh resume --input "/chemin/vers/podcast.mp4"
 bin/run.sh dry-run --input "/chemin/vers/podcast.mp4"
+```
+
+Sous Windows (PowerShell) vous pouvez utiliser l'équivalent natif, pratique avec des partages réseau UNC :
+
+```powershell
+bin\run.bat ^
+  --input "\\\\bricesodini\\Savoirs\\Transcriptions\\input\\podcast.mp4" ^
+  --lang auto ^
+  --profile talkshow ^
+  --export txt,md,json,srt,vtt
 ```
 
 ### Apple Shortcuts
@@ -586,12 +660,12 @@ structure:
   min_pause_gap: 6.0
   soft_min_duration: null
   trim_section_titles: true
-  title_case: sentence
+  title_case: sentence        # "title" se comporte comme "sentence" (pas de Title Case forcé)
   enable_titles: false
 
 polish:
   enabled: true
-  sentence_case: true
+  sentence_case: true         # si false, on conserve la casse ASR
   max_sentence_words: 18
   join_short_segments_ms: 650
   acronym_whitelist: ["IA"]
@@ -600,7 +674,8 @@ polish:
   enable_nbsp: true
   normalize_list_markers: true
   list_bullet_symbol: "•"
-  normalize_ellipses: true
+  fix_french_spacing: true    # espace forcé après .!? + compactage des doubles espaces
+  normalize_ellipses: false   # opt-in -> True pour convertir "..." en "…"
   normalize_quotes: true
   ensure_terminal_punct: true
   replacements:
@@ -631,7 +706,7 @@ refine:
   max_segment_duration: 25.0
 ```
 
-Le module *polish* applique ces réglages pour imposer la typographie française (guillemets « » + espaces insécables avant `; : ? !`) et convertir automatiquement les listes `- item` en puces `• item`.
+Le module *polish* applique ces réglages pour imposer la typographie française (guillemets « » + espaces insécables avant `; : ? !`) et convertir automatiquement les listes `- item` en puces `• item`. Les segments conservent désormais leur casse tant que `sentence_case` reste désactivé, et `title_case: title` est interprété comme un simple Sentence Case (pas de `.title()` destructif). `fix_french_spacing` ajoute un espace après `.?!` lorsqu’il manque et compacte les doubles espaces, tandis que `normalize_ellipses` est opt-in afin d’éviter des `…` intempestifs. Pour marquer les mots à faible confiance, personnalise `export.low_confidence.formats` (ex. `template: "[{word}??]"`) plutôt que d’insérer des ellipses forcées.
 
 **Monitoring & reprise**
 
@@ -727,8 +802,19 @@ Oui : `--skip-diarization` (mode rapide / machine légère).
 
 - **Pyannote: auth/token**  
   → Accepter les modèles sur HF, exporter `PYANNOTE_TOKEN`, lancer une première fois pour cache.
+- **Pyannote: Unsupported global (TorchVersion / Specifications / Problem / Resolution / …)**  
+  → Torch 2.6 charge les poids en mode `weights_only=True`. `bin/run.bat` (et `src/diarize.py`) enregistre automatiquement `TorchVersion`, `pyannote.audio.core.task.Specifications`, `Problem` et `Resolution` via `torch.serialization.add_safe_globals()` et loggue la liste activée. Si un nouveau type apparaît, ajoutez-le à `SAFE_GLOBALS` puis relancez via `bin/run.bat`.
+- **WhisperX align**
+  → Les paramètres `num_workers` / `batch_size` sont filtrés dynamiquement pour correspondre à la version installée. En cas de crash (TypeError / IndexError), la pipeline continue avec les segments non alignés mot-à-mot. Vous pouvez aussi bypasser complètement l’align en lançant `bin\run.bat run --only prepare,asr,merge,post,export --input ...`.
 
 Les logs détaillés sont dans `transcribe-suite/logs/`.
+
+### Batch Windows `bin\transcribe_share.bat`
+
+- **Où sont les logs ?** Chaque exécution crée `\\bricesodini\Savoirs\Transcriptions\output\<Nom>\run_YYYYMMDD_HHMMSS.log` (copie du `share_stage\logs\*.log`) et le dossier `work` associé (`...\<Nom>\work\logs\...`). C’est la première source à consulter.
+- **Aucun fichier détecté** : la fenêtre affiche `[transcribe] Aucun fichier media...`. Déposez un `.mp4/.wav/.mp3/.m4a` dans `\\...\input`, relancez, la fenêtre reste ouverte tant que rien n’est disponible.
+- **Input/output inaccessibles** : le script échoue immédiatement avec un message `ERREUR: Dossier ... inaccessible`. Vérifiez que le partage NAS est monté (droits + VPN) et que `\\bricesodini\Savoirs\Transcriptions\input` / `output` sont atteignables depuis l’explorateur avant de relancer.
+- **Run en échec** : la fenêtre reste ouverte, le log cite le code retour. Ouvrez le `run_*.log` du dossier output puis (si besoin) `work\logs\run.log` pour l’erreur détaillée. Corrigez (token, CUDA, fichier corrompu…), laissez `\\...\input` vide (le .bat a déplacé le média en `_processed` seulement en cas de succès) puis relancez.
 
 ---
 

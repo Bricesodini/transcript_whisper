@@ -1,3 +1,4 @@
+# Base deps communs
 numpy>=1.26
 soundfile>=0.12
 pydub>=0.25
@@ -6,11 +7,23 @@ tqdm>=4.66
 rich>=13.7
 huggingface-hub>=0.19
 langdetect>=1.0.9
+psutil>=5.9
 
+# Roues PyTorch CUDA (Win GPU) disponibles sur l'index officiel
+--extra-index-url https://download.pytorch.org/whl/cu124
+
+# CUDA (Windows / GPU Nvidia)
+torch==2.6.0+cu124 ; platform_system == "Windows"
+torchaudio==2.6.0+cu124 ; platform_system == "Windows"
+onnxruntime-gpu>=1.23.2 ; platform_system == "Windows"
+
+# Apple Silicon (CPU)
 torch ; platform_system == "Darwin" and platform_machine == "arm64"
 torchaudio ; platform_system == "Darwin" and platform_machine == "arm64"
 
-whisperx
+# Autres plateformes (CPU par defaut)
+onnxruntime>=1.23.2 ; platform_system != "Windows"
+
+whisperx==3.4.0
 pyannote.audio>=3.3.2,<4.0.0
 faster-whisper
-psutil>=5.9
