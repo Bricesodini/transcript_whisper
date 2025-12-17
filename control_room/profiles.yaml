@@ -1,0 +1,22 @@
+version: 1
+asr:
+  default:
+    label: "ASR - défaut"
+    args: []
+  talkshow:
+    label: "ASR - talkshow"
+    args: ["--profile", "talkshow"]
+lexicon:
+  default:
+    label: "Lexicon - standard"
+    args: []
+  audit:
+    label: "Lexicon - audit strict"
+    args: ["--max-docs", "10"]
+rag:
+  default:
+    label: "RAG - défaut"
+    args: []
+  nas:
+    label: "RAG - NAS v1"
+    args: ["--version-tag", "nas_v1"]
