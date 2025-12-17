@@ -71,6 +71,11 @@ def parse_args():
     parser.add_argument("--lang", default=None, help="Langue forcée (fr, en, auto)")
     parser.add_argument("--profile", default=None, help="Profil de configuration (default, talkshow, conference)")
     parser.add_argument("--export", default=None, help="Formats à exporter (csv de txt,md,json,srt,vtt)")
+    parser.add_argument(
+        "--allow-local-exports",
+        action="store_true",
+        help="Autorise temporairement paths.exports_dir à pointer dans le dépôt (dev).",
+    )
     parser.add_argument("--initial-prompt", default=None, help="Prompt initial pour l'ASR")
     parser.add_argument("--skip-diarization", action="store_true", help="Désactive Pyannote (debug/seulement ASR)")
     parser.add_argument("--keep-build", action="store_true", help="Ne pas supprimer les artefacts temporaires")
@@ -171,7 +176,12 @@ class PipelineRunner:
         self._apply_overrides(args)
         if self.strict:
             self._validate_config_or_raise()
-        self.paths = prepare_paths(self.config_path.parent.parent, self.config)
+        self.allow_local_exports = bool(getattr(args, "allow_local_exports", False))
+        self.paths = prepare_paths(
+            self.config_path.parent.parent,
+            self.config,
+            allow_local_exports=self.allow_local_exports,
+        )
 
         self.work_root = self.paths["work_dir"]
         self.work_dir = self.work_root / self.media_path.stem

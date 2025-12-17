@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -15,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
+from functools import lru_cache
 from pydantic import BaseModel, Field
 
 from .commands import (
@@ -45,6 +47,7 @@ from .preview import preview_with_timeout
 from .profiles import ProfilesConfig, load_profiles
 from .resolver import DocPaths, ResolverError, resolve_doc
 from .runner import JobManager
+from .storage import collect_storage_snapshot
 from .schemas import (
     APIEnvelope,
     APIError,
@@ -53,12 +56,14 @@ from .schemas import (
     DocDetailPayload,
     DocsPayload,
     FilesPayload,
+    HealthPayload,
     JobPayload,
     JobsPayload,
     LogPayload,
     PreviewPayload,
     ProfilesPayload,
     SuggestedPayload,
+    StoragePayload,
 )
 from .settings import get_settings
 
@@ -166,6 +171,15 @@ def register_routes(app: FastAPI) -> None:
     @app.get("/health")
     async def health() -> Dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/api/v1/health", response_model=APIEnvelope)
+    async def api_health() -> APIEnvelope:
+        return success(_build_health_payload())
+
+    @app.get("/api/v1/storage", response_model=APIEnvelope)
+    async def storage_snapshot() -> APIEnvelope:
+        snapshot = collect_storage_snapshot(settings)
+        return success(StoragePayload(**snapshot))
 
     @app.get("/api/v1/profiles", response_model=APIEnvelope)
     async def get_profiles() -> APIEnvelope:
@@ -530,6 +544,78 @@ def _get_doc_paths(doc_name: str) -> DocPaths:
         return resolve_doc(settings, doc_name)
     except ResolverError as exc:
         raise_api_error("doc_not_found", str(exc))
+
+
+def _build_health_payload() -> HealthPayload:
+    stats = job_manager.get_stats()
+    (
+        data_pipeline_root_path,
+        data_root_exists,
+        data_root_hint,
+    ) = _path_state(settings.data_pipeline_root, "DATA_PIPELINE_ROOT")
+    ts_repo_path, ts_repo_exists, ts_repo_hint = _path_state(settings.ts_repo_root, "TS_REPO_ROOT")
+    run_bat_path, run_bat_exists, run_bat_hint = _path_state(settings.run_bat_path, "TS_RUN_BAT_PATH")
+    jobs_db_path, jobs_db_exists, jobs_db_hint = _path_state(settings.jobs_db_path, "jobs.db")
+    logs_dir_path, logs_dir_exists, logs_hint = _path_state(settings.logs_dir, "logs_dir")
+
+    if settings.ts_venv_dir:
+        ts_venv_path, ts_venv_exists, ts_venv_hint = _path_state(
+            settings.ts_venv_dir, "TS_VENV_DIR"
+        )
+    else:
+        ts_venv_path, ts_venv_exists, ts_venv_hint = (None, False, "TS_VENV_DIR non configurÃ©")
+
+    return HealthPayload(
+        data_pipeline_root=data_pipeline_root_path,
+        data_pipeline_root_exists=data_root_exists,
+        data_pipeline_root_hint=data_root_hint,
+        ts_repo_root=ts_repo_path,
+        ts_repo_root_exists=ts_repo_exists,
+        ts_repo_root_hint=ts_repo_hint,
+        run_bat_path=run_bat_path,
+        run_bat_exists=run_bat_exists,
+        run_bat_hint=run_bat_hint,
+        ts_venv_dir=ts_venv_path,
+        ts_venv_exists=ts_venv_exists,
+        ts_venv_hint=ts_venv_hint,
+        logs_dir=logs_dir_path,
+        logs_dir_exists=logs_dir_exists,
+        logs_dir_hint=logs_hint,
+        jobs_db_path=jobs_db_path,
+        jobs_db_exists=jobs_db_exists,
+        jobs_db_hint=jobs_db_hint,
+        queued_jobs=stats.queued,
+        running_jobs=stats.running,
+        succeeded_jobs=stats.succeeded,
+        failed_jobs=stats.failed,
+        canceled_jobs=stats.canceled,
+        ws_enabled=True,
+        api_key_enabled=bool(settings.api_key),
+        git_sha=_git_sha(),
+    )
+
+
+def _path_state(path: Path, label: str) -> tuple[str, bool, Optional[str]]:
+    resolved = str(path)
+    exists = path.exists()
+    hint = None if exists else f"{label} introuvable"
+    return resolved, exists, hint
+
+
+@lru_cache()
+def _git_sha() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(settings.ts_repo_root),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        sha = result.stdout.strip()
+        return sha or "unknown"
+    except Exception:
+        return "unknown"
 
 
 app = create_app()

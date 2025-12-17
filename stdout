@@ -1,0 +1,103 @@
+0000	40 65 63 68 6f 20 6f 66  66 0a 73 65 74 6c 6f 63   @echo off.setloc
+0010	61 6c 20 45 6e 61 62 6c  65 45 78 74 65 6e 73 69   al EnableExtensi
+0020	6f 6e 73 0a 0a 73 65 74  20 52 4f 4f 54 3d 25 7e   ons..set ROOT=%~
+0030	64 70 30 2e 2e 0a 73 65  74 20 50 59 54 48 4f 4e   dp0...set PYTHON
+0040	3d 25 52 4f 4f 54 25 5c  2e 76 65 6e 76 5c 53 63   =%ROOT%\.venv\Sc
+0050	72 69 70 74 73 5c 70 79  74 68 6f 6e 2e 65 78 65   ripts\python.exe
+0060	0a 69 66 20 6e 6f 74 20  65 78 69 73 74 20 22 25   .if not exist "%
+0070	50 59 54 48 4f 4e 25 22  20 28 0a 20 20 73 65 74   PYTHON%" (.  set
+0080	20 50 59 54 48 4f 4e 3d  70 79 74 68 6f 6e 0a 29    PYTHON=python.)
+0090	0a 0a 66 6f 72 20 2f 66  20 25 25 49 20 69 6e 20   ..for /f %%I in 
+00a0	28 27 70 6f 77 65 72 73  68 65 6c 6c 20 2d 4e 6f   ('powershell -No
+00b0	50 72 6f 66 69 6c 65 20  2d 43 6f 6d 6d 61 6e 64   Profile -Command
+00c0	20 22 47 65 74 2d 44 61  74 65 20 2d 46 6f 72 6d    "Get-Date -Form
+00d0	61 74 20 79 79 79 79 4d  4d 64 64 5f 48 48 6d 6d   at yyyyMMdd_HHmm
+00e0	73 73 22 27 29 20 64 6f  20 73 65 74 20 51 41 5f   ss"') do set QA_
+00f0	54 53 3d 25 25 49 0a 73  65 74 20 4c 4f 47 44 49   TS=%%I.set LOGDI
+0100	52 3d 25 52 4f 4f 54 25  5c 6c 6f 67 73 0a 69 66   R=%ROOT%\logs.if
+0110	20 6e 6f 74 20 65 78 69  73 74 20 22 25 4c 4f 47    not exist "%LOG
+0120	44 49 52 25 22 20 6d 6b  64 69 72 20 22 25 4c 4f   DIR%" mkdir "%LO
+0130	47 44 49 52 25 22 20 3e  6e 75 6c 20 32 3e 26 31   GDIR%" >nul 2>&1
+0140	0a 73 65 74 20 51 41 5f  4c 4f 47 3d 25 4c 4f 47   .set QA_LOG=%LOG
+0150	44 49 52 25 5c 71 61 5f  63 68 65 63 6b 5f 25 51   DIR%\qa_check_%Q
+0160	41 5f 54 53 25 2e 6c 6f  67 0a 0a 65 63 68 6f 20   A_TS%.log..echo 
+0170	5b 51 41 5d 20 4c 6f 67  73 20 2d 3e 20 25 51 41   [QA] Logs -> %QA
+0180	5f 4c 4f 47 25 0a 0a 65  63 68 6f 20 5b 51 41 5d   _LOG%..echo [QA]
+0190	20 54 65 73 74 73 20 75  6e 69 74 61 69 72 65 73    Tests unitaires
+01a0	20 28 54 72 61 6e 73 63  72 69 62 65 20 53 75 69    (Transcribe Sui
+01b0	74 65 29 0a 70 75 73 68  64 20 22 25 52 4f 4f 54   te).pushd "%ROOT
+01c0	25 22 0a 22 25 50 59 54  48 4f 4e 25 22 20 2d 6d   %"."%PYTHON%" -m
+01d0	20 70 79 74 65 73 74 20  74 72 61 6e 73 63 72 69    pytest transcri
+01e0	62 65 2d 73 75 69 74 65  5c 74 65 73 74 73 5c 75   be-suite\tests\u
+01f0	6e 69 74 20 3e 3e 20 22  25 51 41 5f 4c 4f 47 25   nit >> "%QA_LOG%
+0200	22 20 32 3e 26 31 0a 69  66 20 65 72 72 6f 72 6c   " 2>&1.if errorl
+0210	65 76 65 6c 20 31 20 67  6f 74 6f 20 66 61 69 6c   evel 1 goto fail
+0220	0a 70 6f 70 64 0a 0a 65  63 68 6f 20 5b 51 41 5d   .popd..echo [QA]
+0230	20 54 65 73 74 73 20 43  6f 6e 74 72 6f 6c 20 52    Tests Control R
+0240	6f 6f 6d 0a 70 75 73 68  64 20 22 25 52 4f 4f 54   oom.pushd "%ROOT
+0250	25 22 0a 22 25 50 59 54  48 4f 4e 25 22 20 2d 6d   %"."%PYTHON%" -m
+0260	20 70 79 74 65 73 74 20  74 65 73 74 73 5c 63 6f    pytest tests\co
+0270	6e 74 72 6f 6c 5f 72 6f  6f 6d 20 3e 3e 20 22 25   ntrol_room >> "%
+0280	51 41 5f 4c 4f 47 25 22  20 32 3e 26 31 0a 69 66   QA_LOG%" 2>&1.if
+0290	20 65 72 72 6f 72 6c 65  76 65 6c 20 31 20 67 6f    errorlevel 1 go
+02a0	74 6f 20 66 61 69 6c 0a  70 6f 70 64 0a 0a 65 63   to fail.popd..ec
+02b0	68 6f 20 5b 51 41 5d 20  41 75 64 69 74 20 64 c3   ho [QA] Audit d.
+02c0	a9 70 c3 b4 74 20 28 64  72 79 2d 72 75 6e 29 0a   .p..t (dry-run).
+02d0	70 75 73 68 64 20 22 25  52 4f 4f 54 25 5c 74 72   pushd "%ROOT%\tr
+02e0	61 6e 73 63 72 69 62 65  2d 73 75 69 74 65 22 0a   anscribe-suite".
+02f0	22 25 50 59 54 48 4f 4e  25 22 20 2d 6d 20 74 6f   "%PYTHON%" -m to
+0300	6f 6c 73 2e 63 6c 65 61  6e 75 70 5f 61 75 64 69   ols.cleanup_audi
+0310	74 20 2d 2d 72 65 70 6f  2d 72 6f 6f 74 20 22 25   t --repo-root "%
+0320	52 4f 4f 54 25 5c 74 72  61 6e 73 63 72 69 62 65   ROOT%\transcribe
+0330	2d 73 75 69 74 65 22 20  2d 2d 6f 75 74 2d 64 69   -suite" --out-di
+0340	72 20 22 25 52 4f 4f 54  25 5c 6c 6f 67 73 22 20   r "%ROOT%\logs" 
+0350	2d 2d 66 61 69 6c 2d 6f  6e 2d 6c 65 67 61 63 79   --fail-on-legacy
+0360	20 3e 3e 20 22 25 51 41  5f 4c 4f 47 25 22 20 32    >> "%QA_LOG%" 2
+0370	3e 26 31 0a 69 66 20 65  72 72 6f 72 6c 65 76 65   >&1.if errorleve
+0380	6c 20 31 20 67 6f 74 6f  20 66 61 69 6c 0a 70 6f   l 1 goto fail.po
+0390	70 64 0a 0a 69 66 20 64  65 66 69 6e 65 64 20 44   pd..if defined D
+03a0	41 54 41 5f 50 49 50 45  4c 49 4e 45 5f 52 4f 4f   ATA_PIPELINE_ROO
+03b0	54 20 28 0a 20 20 65 63  68 6f 20 5b 51 41 5d 20   T (.  echo [QA] 
+03c0	4e 41 53 20 61 75 64 69  74 20 28 64 72 79 2d 72   NAS audit (dry-r
+03d0	75 6e 29 0a 20 20 70 75  73 68 64 20 22 25 52 4f   un).  pushd "%RO
+03e0	4f 54 25 5c 74 72 61 6e  73 63 72 69 62 65 2d 73   OT%\transcribe-s
+03f0	75 69 74 65 22 0a 20 20  22 25 50 59 54 48 4f 4e   uite".  "%PYTHON
+0400	25 22 20 2d 6d 20 74 6f  6f 6c 73 2e 6e 61 73 5f   %" -m tools.nas_
+0410	61 75 64 69 74 20 2d 2d  72 6f 6f 74 20 22 25 44   audit --root "%D
+0420	41 54 41 5f 50 49 50 45  4c 49 4e 45 5f 52 4f 4f   ATA_PIPELINE_ROO
+0430	54 25 22 20 2d 2d 6f 75  74 2d 64 69 72 20 22 25   T%" --out-dir "%
+0440	52 4f 4f 54 25 5c 6c 6f  67 73 22 20 3e 3e 20 22   ROOT%\logs" >> "
+0450	25 51 41 5f 4c 4f 47 25  22 20 32 3e 26 31 0a 20   %QA_LOG%" 2>&1. 
+0460	20 69 66 20 65 72 72 6f  72 6c 65 76 65 6c 20 31    if errorlevel 1
+0470	20 67 6f 74 6f 20 66 61  69 6c 0a 20 20 70 6f 70    goto fail.  pop
+0480	64 0a 29 20 65 6c 73 65  20 28 0a 20 20 65 63 68   d.) else (.  ech
+0490	6f 20 5b 51 41 5d 20 4e  41 53 20 61 75 64 69 74   o [QA] NAS audit
+04a0	20 69 67 6e 6f 72 c3 a9  20 28 44 41 54 41 5f 50    ignor.. (DATA_P
+04b0	49 50 45 4c 49 4e 45 5f  52 4f 4f 54 20 6e 6f 6e   IPELINE_ROOT non
+04c0	20 64 c3 a9 66 69 6e 69  29 0a 20 20 65 63 68 6f    d..fini).  echo
+04d0	20 5b 51 41 5d 20 4e 41  53 20 61 75 64 69 74 20    [QA] NAS audit 
+04e0	69 67 6e 6f 72 c3 a9 20  28 44 41 54 41 5f 50 49   ignor.. (DATA_PI
+04f0	50 45 4c 49 4e 45 5f 52  4f 4f 54 20 6e 6f 6e 20   PELINE_ROOT non 
+0500	64 c3 a9 66 69 6e 69 29  20 3e 3e 20 22 25 51 41   d..fini) >> "%QA
+0510	5f 4c 4f 47 25 22 0a 29  0a 0a 66 6f 72 20 2f 66   _LOG%".)..for /f
+0520	20 25 25 50 20 69 6e 20  28 27 70 6f 77 65 72 73    %%P in ('powers
+0530	68 65 6c 6c 20 2d 4e 6f  50 72 6f 66 69 6c 65 20   hell -NoProfile 
+0540	2d 43 6f 6d 6d 61 6e 64  20 22 47 65 74 2d 52 61   -Command "Get-Ra
+0550	6e 64 6f 6d 20 2d 4d 69  6e 69 6d 75 6d 20 38 32   ndom -Minimum 82
+0560	30 30 20 2d 4d 61 78 69  6d 75 6d 20 38 39 30 30   00 -Maximum 8900
+0570	22 27 29 20 64 6f 20 73  65 74 20 51 41 5f 50 4f   "') do set QA_PO
+0580	52 54 3d 25 25 50 0a 65  63 68 6f 20 5b 51 41 5d   RT=%%P.echo [QA]
+0590	20 53 6d 6f 6b 65 20 43  6f 6e 74 72 6f 6c 20 52    Smoke Control R
+05a0	6f 6f 6d 20 28 70 6f 72  74 20 25 51 41 5f 50 4f   oom (port %QA_PO
+05b0	52 54 25 29 0a 22 25 52  4f 4f 54 25 5c 62 69 6e   RT%)."%ROOT%\bin
+05c0	5c 63 6f 6e 74 72 6f 6c  5f 72 6f 6f 6d 5f 73 6d   \control_room_sm
+05d0	6f 6b 65 2e 62 61 74 22  20 2d 2d 70 6f 72 74 20   oke.bat" --port 
+05e0	25 51 41 5f 50 4f 52 54  25 20 3e 3e 20 22 25 51   %QA_PORT% >> "%Q
+05f0	41 5f 4c 4f 47 25 22 20  32 3e 26 31 0a 69 66 20   A_LOG%" 2>&1.if 
+0600	65 72 72 6f 72 6c 65 76  65 6c 20 31 20 67 6f 74   errorlevel 1 got
+0610	6f 20 66 61 69 6c 0a 0a  65 63 68 6f 20 5b 51 41   o fail..echo [QA
+0620	5d 20 4f 4b 0a 65 78 69  74 20 2f 62 20 30 0a 0a   ] OK.exit /b 0..
+0630	3a 66 61 69 6c 0a 65 63  68 6f 20 5b 51 41 5d 20   :fail.echo [QA] 
+0640	46 41 49 4c 45 44 20 28  76 6f 69 72 20 25 51 41   FAILED (voir %QA
+0650	5f 4c 4f 47 25 29 0a 65  78 69 74 20 2f 62 20 31   _LOG%).exit /b 1
+0660	0a                                                 .

@@ -109,8 +109,14 @@ def test_clean_txt_export(tmp_path):
 
 
 class _DummyLogger:
+    def debug(self, *_, **__):
+        return
+
     def info(self, *_, **__):
         return
 
     def warning(self, *_, **__):
+        return
+
+    def error(self, *_, **__):
         return

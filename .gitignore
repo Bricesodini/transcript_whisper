@@ -10,6 +10,7 @@ transcribe-suite/logs/
 transcribe-suite/exports/
 transcribe-suite/results/
 transcribe-suite/RAG/
+transcribe-suite/_deprecated_*/
 
 # --- Working / temporary directories ---
 transcribe-suite/work/
@@ -63,4 +64,5 @@ Thumbs.db
 *.csv
 *.jsonl
 *.sqlite
-*.dbtranscribe-suite/work/
+*.db
+transcribe-suite/work/

@@ -1,0 +1,47 @@
+{
+  "root": "D:\\02_dev\\scripts\\transcribe-suite\\transcribe-suite\\share_stage",
+  "generated_at": "2025-12-17T21:31:08+00:00",
+  "directories": [
+    {
+      "label": "Inputs bruts",
+      "path": "D:\\02_dev\\scripts\\transcribe-suite\\transcribe-suite\\share_stage\\01_input",
+      "exists": false,
+      "size_bytes": 0,
+      "items": 0,
+      "oldest": null,
+      "newest": null
+    },
+    {
+      "label": "Sources ASR + work",
+      "path": "D:\\02_dev\\scripts\\transcribe-suite\\transcribe-suite\\share_stage\\02_output_source",
+      "exists": false,
+      "size_bytes": 0,
+      "items": 0,
+      "oldest": null,
+      "newest": null
+    },
+    {
+      "label": "Exports RAG",
+      "path": "D:\\02_dev\\scripts\\transcribe-suite\\transcribe-suite\\share_stage\\03_output_RAG",
+      "exists": false,
+      "size_bytes": 0,
+      "items": 0,
+      "oldest": null,
+      "newest": null
+    },
+    {
+      "label": "Archives",
+      "path": "D:\\02_dev\\scripts\\transcribe-suite\\transcribe-suite\\share_stage\\04_archive",
+      "exists": false,
+      "size_bytes": 0,
+      "items": 0,
+      "oldest": null,
+      "newest": null
+    }
+  ],
+  "heavy_docs": [],
+  "orphans": {
+    "missing_rag": [],
+    "missing_source": []
+  }
+}

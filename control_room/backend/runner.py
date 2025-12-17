@@ -37,6 +37,15 @@ class LockState:
     action: Optional[JobAction]
 
 
+@dataclass
+class JobStats:
+    queued: int
+    running: int
+    succeeded: int
+    failed: int
+    canceled: int
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -205,6 +214,14 @@ class JobStore:
             rows = cur.fetchall()
         return [self._row_to_record(row) for row in rows]
 
+    def count_by_status(self, status: JobStatus) -> int:
+        with self._get_conn() as conn:
+            cur = conn.execute(
+                "SELECT COUNT(1) as total FROM jobs WHERE status = ?", (status.value,)
+            )
+            row = cur.fetchone()
+        return int(row["total"]) if row and row["total"] is not None else 0
+
     def last_job_for_doc(
         self, doc: str, actions: Optional[List[JobAction]] = None
     ) -> Optional[JobRecord]:
@@ -316,6 +333,15 @@ class JobManager:
         self, doc: str, actions: Optional[List[JobAction]] = None
     ) -> Optional[JobRecord]:
         return self.store.last_job_for_doc(doc, actions)
+
+    def get_stats(self) -> JobStats:
+        return JobStats(
+            queued=self.store.count_by_status(JobStatus.QUEUED),
+            running=self.store.count_by_status(JobStatus.RUNNING),
+            succeeded=self.store.count_by_status(JobStatus.SUCCESS),
+            failed=self.store.count_by_status(JobStatus.FAIL),
+            canceled=self.store.count_by_status(JobStatus.CANCELED),
+        )
 
     def read_log(self, job_id: int, max_bytes: int = 200_000) -> str:
         job = self.get_job(job_id)

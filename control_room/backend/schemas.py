@@ -74,3 +74,55 @@ class LogPayload(BaseModel):
 
 class CancelPayload(BaseModel):
     canceled: bool
+
+
+class HealthPayload(BaseModel):
+    data_pipeline_root: str
+    data_pipeline_root_exists: bool
+    data_pipeline_root_hint: Optional[str] = None
+    ts_repo_root: str
+    ts_repo_root_exists: bool
+    ts_repo_root_hint: Optional[str] = None
+    run_bat_path: str
+    run_bat_exists: bool
+    run_bat_hint: Optional[str] = None
+    ts_venv_dir: Optional[str] = None
+    ts_venv_exists: bool
+    ts_venv_hint: Optional[str] = None
+    logs_dir: str
+    logs_dir_exists: bool
+    logs_dir_hint: Optional[str] = None
+    jobs_db_path: str
+    jobs_db_exists: bool
+    jobs_db_hint: Optional[str] = None
+    queued_jobs: int
+    running_jobs: int
+    succeeded_jobs: int
+    failed_jobs: int
+    canceled_jobs: int
+    ws_enabled: bool
+    api_key_enabled: bool
+    git_sha: str
+
+
+class StorageDirPayload(BaseModel):
+    label: str
+    path: str
+    exists: bool
+    size_bytes: int
+    items: int
+    oldest: Optional[str] = None
+    newest: Optional[str] = None
+
+
+class HeavyDocPayload(BaseModel):
+    doc_id: str
+    size_bytes: int
+    location: str
+
+
+class StoragePayload(BaseModel):
+    root: str
+    directories: List[StorageDirPayload]
+    heavy_docs: List[HeavyDocPayload]
+    orphans: Dict[str, List[str]]

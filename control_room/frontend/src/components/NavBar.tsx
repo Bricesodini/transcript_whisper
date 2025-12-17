@@ -10,10 +10,10 @@ const NavBar = () => {
         </NavLink>
         <NavLink to="/docs">Documents</NavLink>
         <NavLink to="/jobs">Jobs & Logs</NavLink>
+        <NavLink to="/storage">Storage / Cleanup</NavLink>
       </nav>
     </aside>
   );
 };
 
 export default NavBar;
-

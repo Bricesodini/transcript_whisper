@@ -16,6 +16,12 @@ from typing import Any, Dict, List, Optional
 import yaml
 import hashlib
 
+TS_SRC_DIR = Path(__file__).resolve()
+TS_ROOT = TS_SRC_DIR.parents[1]
+REPO_ROOT = TS_ROOT.parent
+FORBIDDEN_ROOTS = (TS_ROOT, REPO_ROOT)
+LOCAL_DATA_ENV_VAR = "TS_ALLOW_LOCAL_DATA"
+
 THREAD_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS")
 _UTF8_CONSOLE_STREAM = None
 
@@ -156,7 +162,7 @@ def select_profile(config: Dict[str, Any], profile_name: str) -> Dict[str, Any]:
     return merged
 
 
-def prepare_paths(root: Path, cfg: Dict[str, Any]) -> Dict[str, Path]:
+def prepare_paths(root: Path, cfg: Dict[str, Any], *, allow_local_exports: bool = False) -> Dict[str, Path]:
     paths_cfg = cfg.get("paths", {})
     defaults = {
         "inputs_dir": root / "inputs",
@@ -169,9 +175,38 @@ def prepare_paths(root: Path, cfg: Dict[str, Any]) -> Dict[str, Path]:
     for key, default in defaults.items():
         rel = paths_cfg.get(key)
         target = (root / rel).resolve() if rel else default.resolve()
+        if key != "inputs_dir":
+            _validate_runtime_path(target, label=key, allow_local_exports=allow_local_exports and key == "exports_dir")
         target.mkdir(parents=True, exist_ok=True)
         resolved[key] = target
     return resolved
+
+
+def _validate_runtime_path(path: Path, *, label: str, allow_local_exports: bool = False) -> None:
+    if os.getenv(LOCAL_DATA_ENV_VAR):
+        return
+    resolved = path.resolve()
+    for forbidden in FORBIDDEN_ROOTS:
+        try:
+            resolved.relative_to(forbidden)
+        except ValueError:
+            continue
+        if label == "exports_dir" and allow_local_exports:
+            _warn_local_exports(resolved)
+            return
+        raise PipelineError(
+            f"paths.{label} pointe vers {resolved} à l'intérieur du dépôt. "
+            "Configurez DATA_PIPELINE_ROOT / paths.<name> vers un partage NAS ou utilisez "
+            f"{LOCAL_DATA_ENV_VAR}=1 uniquement en dev/test."
+        )
+
+
+def _warn_local_exports(target: Path) -> None:
+    message = (
+        f"[paths] WARNING: paths.exports_dir pointe vers {target} à l'intérieur du dépôt. "
+        "Utilisez --allow-local-exports uniquement pour du debug ponctuel."
+    )
+    print(message, file=sys.stderr)
 
 
 def setup_logger(log_dir: Path, run_name: str, log_level: str = "INFO") -> logging.Logger:

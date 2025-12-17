@@ -111,3 +111,29 @@ export interface ProfilesPayload {
     rag: Record<string, ProfileEntry>;
   };
 }
+
+export interface StorageDirInfo {
+  label: string;
+  path: string;
+  exists: boolean;
+  size_bytes: number;
+  items: number;
+  oldest?: string | null;
+  newest?: string | null;
+}
+
+export interface HeavyDocInfo {
+  doc_id: string;
+  size_bytes: number;
+  location: string;
+}
+
+export interface StoragePayload {
+  root: string;
+  directories: StorageDirInfo[];
+  heavy_docs: HeavyDocInfo[];
+  orphans: {
+    missing_rag: string[];
+    missing_source: string[];
+  };
+}

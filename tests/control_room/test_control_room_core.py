@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 import time
 from pathlib import Path
 
@@ -227,3 +228,87 @@ def test_jobs_endpoint_contract(monkeypatch) -> None:
     assert payload["api_version"] == "v1"
     assert payload["error"] is None
     assert payload["data"] == {"jobs": []}
+
+
+def test_storage_endpoint_contract(monkeypatch) -> None:
+    monkeypatch.setattr(
+        backend_app,
+        "collect_storage_snapshot",
+        lambda *args, **kwargs: {
+            "root": "/nas",
+            "directories": [],
+            "heavy_docs": [],
+            "orphans": {"missing_rag": [], "missing_source": []},
+        },
+    )
+    client = TestClient(backend_app.app)
+    response = client.get("/api/v1/storage")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["api_version"] == "v1"
+    assert payload["error"] is None
+    assert payload["data"]["root"] == "/nas"
+
+
+def test_health_endpoint_contract() -> None:
+    client = TestClient(backend_app.app)
+    response = client.get("/api/v1/health")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["api_version"] == "v1"
+    assert body["error"] is None
+    data = body["data"]
+    required_keys = [
+        "data_pipeline_root",
+        "data_pipeline_root_exists",
+        "ts_repo_root",
+        "ts_repo_root_exists",
+        "run_bat_path",
+        "run_bat_exists",
+        "ts_venv_dir",
+        "ts_venv_exists",
+        "logs_dir",
+        "logs_dir_exists",
+        "jobs_db_path",
+        "jobs_db_exists",
+        "queued_jobs",
+        "running_jobs",
+        "succeeded_jobs",
+        "failed_jobs",
+        "canceled_jobs",
+        "ws_enabled",
+        "api_key_enabled",
+        "git_sha",
+    ]
+    for key in required_keys:
+        assert key in data
+    if not data["ts_venv_exists"]:
+        assert data["ts_venv_hint"]
+    if not data["data_pipeline_root_exists"]:
+        assert data["data_pipeline_root_hint"]
+
+
+def test_health_git_sha_fallback(monkeypatch) -> None:
+    backend_app._git_sha.cache_clear()
+
+    def _fail_git(*args, **kwargs):
+        raise subprocess.CalledProcessError(returncode=1, cmd="git")
+
+    monkeypatch.setattr(backend_app.subprocess, "run", _fail_git)
+    client = TestClient(backend_app.app)
+    response = client.get("/api/v1/health")
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["git_sha"] == "unknown"
+    backend_app._git_sha.cache_clear()
+
+
+def test_api_requires_key(monkeypatch) -> None:
+    original = backend_app.settings.api_key
+    backend_app.settings.api_key = "secret-token"
+    client = TestClient(backend_app.app)
+    response = client.get("/api/v1/docs")
+    assert response.status_code == 401
+    payload = response.json()
+    assert payload["error"]["code"] == "unauthorized"
+    backend_app.settings.api_key = original

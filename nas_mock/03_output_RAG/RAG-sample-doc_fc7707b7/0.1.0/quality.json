@@ -1,0 +1,15 @@
+{
+  "broken_refs": 0,
+  "coverage_time_pct": 1.0,
+  "lexical_docs": null,
+  "lexical_index_terms": null,
+  "pct_chunks_conf_gt_threshold": 1.0,
+  "thresholds": {
+    "confidence_error": 0.45,
+    "confidence_warn": 0.6
+  },
+  "totals": {
+    "chunks": 1,
+    "segments": 3
+  }
+}

@@ -1,0 +1,159 @@
+{
+  "config_effective_path": "D:\\02_dev\\scripts\\transcribe-suite\\nas_mock\\03_output_RAG\\RAG-sample-doc-lexicon_afebd414\\0.1.0\\config.effective.yaml",
+  "config_effective_sha256": "74c557c5344bc6886ecf38034061f52da0992a456bab442ef1ed60ce679802c3",
+  "config_snapshot": {
+    "base_path": "C:\\Users\\brice\\AppData\\Local\\Temp\\pytest-of-brice\\pytest-66\\test_rag_export_ignores_sugges0\\rag.yaml",
+    "cli_overrides": {},
+    "doc_override_path": null,
+    "effective": {
+      "chunks": {
+        "llm_chunks_enabled": false,
+        "overlap_tokens": 40,
+        "target_tokens": 200
+      },
+      "citations": {
+        "base_url": null,
+        "markdown_format": "[Voir extrait]({url}) ({start_mmss}-{end_mmss})",
+        "text_format": "{title} [{start_mmss}-{end_mmss}]",
+        "url_template": "{base_url}?t={start_s}s"
+      },
+      "default_lang": "auto",
+      "doc_id": {
+        "fallback_hash_length": 12,
+        "hash_length": 8,
+        "slug_max_length": 72
+      },
+      "export_dir_prefix": "RAG-",
+      "health": {
+        "coverage_target_pct": 0.95,
+        "encoding_sample_size": 16,
+        "sample_queries": []
+      },
+      "index": {
+        "enable_embeddings": false,
+        "enable_sqlite": true
+      },
+      "logging": {
+        "diff_stats": true,
+        "log_dir": "C:/Users/brice/AppData/Local/Temp/pytest-of-brice/pytest-66/test_rag_export_ignores_sugges0/rag-logs"
+      },
+      "output_dir": "C:/Users/brice/AppData/Local/Temp/pytest-of-brice/pytest-66/test_rag_export_ignores_sugges0/rag-out",
+      "quality": {
+        "threshold_error": 0.45,
+        "threshold_warn": 0.6
+      },
+      "schema_version": "0.1.0",
+      "text_normalization": {
+        "acronym_whitelist": [
+          "IA",
+          "HTML",
+          "CSS",
+          "API",
+          "ChatGPT",
+          "Claude"
+        ],
+        "embedding_view": {
+          "enabled": true,
+          "output_filename": "chunks_for_embedding.jsonl"
+        },
+        "glossary": [
+          {
+            "pattern": "(?i)cloud 4\\.5",
+            "replacement": "Claude 4.5"
+          }
+        ]
+      },
+      "versioning": {
+        "allow_force": true,
+        "default_strategy": "error",
+        "version_tag_format": "{doc_id}-{timestamp}"
+      }
+    }
+  },
+  "deterministic_mode": true,
+  "doc_id": "sample-doc-lexicon_afebd414",
+  "doc_title": "sample_doc_lexicon",
+  "generated_at": "1970-01-01T00:00:00Z",
+  "lang": "fr",
+  "options": {
+    "base_url": null,
+    "force": true,
+    "lang_override": null,
+    "no_sqlite": false,
+    "real_timestamps": false,
+    "version_tag": null
+  },
+  "provenance": {
+    "chunks": {
+      "path": "generated",
+      "sha256": null,
+      "source": "segments_word_count"
+    },
+    "clean_text": {
+      "path": "C:\\Users\\brice\\AppData\\Local\\Temp\\pytest-of-brice\\pytest-66\\test_rag_export_ignores_sugges0\\bundle\\TRANSCRIPT - sample_doc_lexicon\\sample.clean.txt",
+      "sha256": "51b04efcbbc65e33428c7587eaa2afc64f3e888ec8fba06c3bde26b9cf6a1119",
+      "source": "clean.txt"
+    },
+    "config": {
+      "effective": {
+        "path": "D:\\02_dev\\scripts\\transcribe-suite\\nas_mock\\03_output_RAG\\RAG-sample-doc-lexicon_afebd414\\0.1.0\\config.effective.yaml",
+        "sha256": "74c557c5344bc6886ecf38034061f52da0992a456bab442ef1ed60ce679802c3"
+      },
+      "sources": [
+        {
+          "label": "base",
+          "path": "C:\\Users\\brice\\AppData\\Local\\Temp\\pytest-of-brice\\pytest-66\\test_rag_export_ignores_sugges0\\rag.yaml",
+          "sha256": "a2c0413000ce9f168283878d2be53aeb2da75c6a6fdf07111c3e641dc1aef451"
+        }
+      ]
+    },
+    "metrics": {
+      "path": "C:\\Users\\brice\\AppData\\Local\\Temp\\pytest-of-brice\\pytest-66\\test_rag_export_ignores_sugges0\\bundle\\work\\sample_doc_lexicon\\05_polished.json",
+      "sha256": "d4b263d9bb0078fc09e3dd74e748ae175a96a7709dd4315e462aa1497c28b3ac",
+      "source": "05_polished.json"
+    },
+    "segments": {
+      "path": "C:\\Users\\brice\\AppData\\Local\\Temp\\pytest-of-brice\\pytest-66\\test_rag_export_ignores_sugges0\\bundle\\work\\sample_doc_lexicon\\05_polished.json",
+      "sha256": "d4b263d9bb0078fc09e3dd74e748ae175a96a7709dd4315e462aa1497c28b3ac",
+      "source": "05_polished.json"
+    }
+  },
+  "rag_schema_version": "0.1.0",
+  "source_media_path": null,
+  "sources": {
+    "chunks": {
+      "kind": "segments_word_count",
+      "path": "generated"
+    },
+    "confidence": {
+      "kind": "segments",
+      "path": "C:\\Users\\brice\\AppData\\Local\\Temp\\pytest-of-brice\\pytest-66\\test_rag_export_ignores_sugges0\\bundle\\work\\sample_doc_lexicon\\05_polished.json"
+    },
+    "segments": {
+      "kind": "05_polished",
+      "path": "C:\\Users\\brice\\AppData\\Local\\Temp\\pytest-of-brice\\pytest-66\\test_rag_export_ignores_sugges0\\bundle\\work\\sample_doc_lexicon\\05_polished.json"
+    },
+    "text": {
+      "kind": "clean_txt",
+      "path": "C:\\Users\\brice\\AppData\\Local\\Temp\\pytest-of-brice\\pytest-66\\test_rag_export_ignores_sugges0\\bundle\\TRANSCRIPT - sample_doc_lexicon\\sample.clean.txt"
+    }
+  },
+  "stats": {
+    "chunking": {
+      "generated": true,
+      "overlap_words": 40,
+      "strategy": "segments_word_count",
+      "target_words": 200
+    },
+    "confidence_summary": null,
+    "config_hash": "de6640a2fdf08095ff8a31286d425bd8be5ca00803d9b213473184e9d415d26d",
+    "duration_s": 32.0,
+    "nb_chunks": 1,
+    "nb_segments": 4
+  },
+  "timestamps_policy": "epoch",
+  "warnings": [
+    "metrics.json absent: confiances globales approximatives",
+    "chunks.jsonl absent: génération de nouveaux chunks"
+  ]
+}

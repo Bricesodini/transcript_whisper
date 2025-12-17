@@ -432,13 +432,53 @@ transcribe-suite/
 
 media_parent/
 ├─ VIDEO.ext
-└─ TRANSCRIPT - VIDEO/
+ └─ TRANSCRIPT - VIDEO/
    ├─ VIDEO.txt / .md / .json / .srt / .vtt
    ├─ VIDEO.chapters.json
    └─ VIDEO.low_confidence.csv
 ```
 
-Toutes les sorties finales sont donc adjacentes au média traité, dans un dossier `TRANSCRIPT - <Nom>`, ce qui évite les duplications dans `transcribe-suite/exports`.
+## 🧼 Write policy (NAS only)
+
+- La règle historique reste valable : les exports ASR (`TRANSCRIPT - <Nom>`) vivent **à côté du média** et les artefacts RAG vont dans `DATA_PIPELINE_ROOT\03_output_RAG`.  
+- Le dépôt `transcribe-suite/` ne sert plus de zone de stockage (`inputs/`, `exports/`, `work/` et consorts sont automatiquement renommés `_deprecated_*`). Toute redirection implicite vers le dépôt lève désormais une erreur, sauf opt-in ponctuel (`--allow-local-exports` ou `TS_ALLOW_LOCAL_DATA=1` pour les tests).
+- Pour vérifier rapidement l'état du dépôt :
+
+  ```powershell
+  bin\cleanup_repo.bat --dry-run      # rapport Markdown + plan JSON
+  # ou
+  ./bin/cleanup_repo.sh --dry-run
+  ```
+
+  Ajoutez `--apply --no-dry-run` uniquement si vous souhaitez déplacer les dossiers legacy vers `_deprecated_*`.
+
+- Besoin d’une vérification complète (tests unitaires + smoke Control Room + audit strict) ? Utilisez `bin\qa_check.bat` (ou `./bin/qa_check.sh`). Le script échoue si un nouveau dossier legacy apparaît ou si la smoke Control Room ne répond pas.
+- Pour suivre l’occupation du NAS, générez régulièrement un rapport :
+
+  ```powershell
+  cd transcribe-suite
+  python -m tools.nas_audit --root \\bricesodini\Savoirs\03_data_pipeline --report docs/NAS_AUDIT.md
+  ```
+
+  Ajoutez `--archive MonDoc --apply --no-dry-run` pour déplacer (manuellement) un dossier vers `04_archive/` tout en conservant l’arborescence.
+
+Toutes les sorties finales restent donc adjacentes au média traité ou sur le partage NAS, ce qui évite les duplications dans `transcribe-suite/exports`.
+
+## ✅ Definition of Done — Cleanup phase
+
+- `bin\qa_check.bat` / `./bin/qa_check.sh` doivent passer (tests unitaires Transcribe Suite + Control Room, smoke `/api/v1/*`, audit dépôt dry-run, NAS audit si `DATA_PIPELINE_ROOT` est défini). Les logs sont stockés dans `logs/qa_check_<timestamp>.log`.
+- En cas de vérification manuelle : `python -m pytest transcribe-suite/tests/unit`, `python -m pytest tests/control_room`, `bin\control_room_smoke.bat --port 8899`.
+- `bin\cleanup_repo.bat --dry-run --fail-on-legacy` sert de garde-fou : aucune écriture tant qu’il reste un dossier “legacy”. Par défaut les rapports partent dans `logs/cleanup_audit_<timestamp>.*`. Utilisez `--write-docs` uniquement quand vous voulez versionner `docs/CLEANUP_AUDIT.md`.
+- Les writes autorisés vivent soit **à côté du média** (`TRANSCRIPT - <Nom>`), soit sur le NAS (`DATA_PIPELINE_ROOT`). Toute écriture dans le dépôt est bloquée, sauf opt-in ponctuel `TS_ALLOW_LOCAL_DATA=1` / `--allow-local-exports` (debug).
+- Pas de suppression : les dossiers locaux sont renommés en `_deprecated_*` (avec README) et les archives NAS passent d’abord en dry-run (`python -m tools.nas_audit --archive ... --dry-run`).
+- Toute application doit être testée sur **une copie staging** via `bin\cleanup_stage.bat` / `.sh` (copie complète dans `../transcribe-suite__cleanup_stage_<timestamp>` + `cleanup_repo --apply`). Ne jamais exécuter `--apply --no-dry-run` directement sur le dépôt.
+
+## Cleanup phase — DONE
+
+- La phase cleanup est considérée comme finalisée : l’état officiel passe par `bin\qa_check.(bat|sh)` qui regroupe tests, smoke et audits.
+- Aucun `cleanup_repo --apply` ne doit être lancé sur le dépôt actif : utilisez obligatoirement `bin\cleanup_stage.(bat|sh)` pour travailler sur une copie staging.
+- Les rapports restent dans `logs/cleanup_*` par défaut ; `--write-docs` n’est utilisé qu’en cas de publication.
+- Les actions destructives sont proscrites (rename `_deprecated_*` uniquement) ; toute divergence impose de rerun `qa_check`.
 
 La **reprise** est automatique : si un fichier JSONL existe ou qu'un segment est marqué `DONE` dans `manifest_state.json`, il est sauté. Chaque worker écrit ses logs (avec PID) pour faciliter le debug.
 

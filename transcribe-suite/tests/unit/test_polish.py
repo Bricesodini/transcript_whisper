@@ -132,6 +132,32 @@ def test_polish_removes_oral_markers():
     assert polished[0]["text"].startswith("On avance")
 
 
+def test_polish_capitalize_after_quotes():
+    cfg = {
+        "enabled": True,
+        "strip_oral_markers": True,
+        "oral_markers": ["tu vois"],
+        "ensure_terminal_punct": True,
+    }
+    polisher = Polisher(cfg, logger=_DummyLogger())
+    segments = [{"start": 0.0, "end": 1.0, "text": "« tu vois on avance »", "speaker": "S", "words": []}]
+    polished = polisher.run(segments, lang="fr")
+    assert "« On avance »." in polished[0]["text"] or "« On avance »" in polished[0]["text"]
+
+
+def test_polish_keeps_numeric_leading_tokens():
+    cfg = {
+        "enabled": True,
+        "strip_oral_markers": True,
+        "oral_markers": ["tu vois"],
+        "sentence_case": True,
+    }
+    polisher = Polisher(cfg, logger=_DummyLogger())
+    segments = [{"start": 0.0, "end": 1.0, "text": "tu vois 2025 est une grande année", "speaker": "S", "words": []}]
+    polished = polisher.run(segments, lang="fr")
+    assert polished[0]["text"].startswith("2025 est une grande année")
+
+
 def test_polish_respects_glossary_case():
     cfg = {
         "enabled": True,
@@ -162,6 +188,9 @@ def test_polish_soft_punctuation_respects_quotes():
 
 
 class _DummyLogger:
+    def debug(self, *_, **__):
+        return
+
     def info(self, *_, **__):
         return
 

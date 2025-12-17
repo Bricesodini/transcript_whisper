@@ -1,4 +1,11 @@
-import { DocInfo, GlossaryRule, JobRecord, PreviewResult, ProfilesPayload } from "../types";
+import {
+  DocInfo,
+  GlossaryRule,
+  JobRecord,
+  PreviewResult,
+  ProfilesPayload,
+  StoragePayload,
+} from "../types";
 import type { ApiEnvelope } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api/v1";
@@ -146,5 +153,8 @@ export const api = {
   },
   async cancelJob(jobId: number) {
     return apiRequest(`/jobs/${jobId}/cancel`, { method: "POST" });
+  },
+  async getStorage(): Promise<StoragePayload> {
+    return apiRequest<StoragePayload>("/storage");
   },
 };

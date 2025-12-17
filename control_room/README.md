@@ -82,6 +82,7 @@ To access the UI from a Mac on the LAN: open `http://<windows-host>:8787/` (afte
 - **Jobs & logs** – queue with per-doc locks, max worker throttling, cancel endpoint, live WebSocket logs, normalized failure taxonomy (UNC, token missing, mojibake, doc locked, etc.) and actionable hints.
 - **Profiles** – `control_room/profiles.yaml` drives the ASR / Lexicon / RAG presets returned by `/api/v1/profiles` and surfaced in the UI.
 - **Glossary QA** – YAML schema validation, regex compile checks, maximum size guardrail and timestamped backups before overwriting `rag.glossary.yaml`.
+- **Storage / Cleanup** – page dédiée (read-only) qui expose les tailles NAS (`01_input`, `02_output_source`, `03_output_RAG`, `04_archive`), les docs les plus lourds, les orphelins (RAG sans source / source sans RAG) et l’API `/api/v1/storage` pour préparer les campagnes d’archivage.
 
 Security guardrails:
 
@@ -96,6 +97,32 @@ Security guardrails:
    `pip install -r transcribe-suite/requirements-dev.txt`
 2. Lancez toute la suite fondations via une seule commande :  
    `python -m pytest tests/control_room`
+
+## Smoke test opérateur
+
+Avant de brancher la Control Room sur le NAS/LAN, exécutez le script de validation rapide :
+
+```powershell
+bin\control_room_smoke.bat --port 8787
+# Mode LAN (bind 0.0.0.0) : bin\control_room_smoke.bat --lan --port 8787
+# API key explicite : bin\control_room_smoke.bat --api-key "secret"
+```
+
+Il vérifie : venv + dépendances clés, démarrage d’Uvicorn et réponses `{api_version:"v1"}` sur `/api/v1/health`, `/api/v1/profiles`, `/api/v1/docs`. Le code retour est non nul si une étape échoue (pratique pour CI ou debug machine).
+
+Options utiles :
+
+- `--lan` : bind `0.0.0.0` (serveur accessible depuis le LAN, les probes restent sur `127.0.0.1`).
+- `--api-key <clé>` : force l’API key utilisée pour les requêtes (sinon la valeur de `CONTROL_ROOM_API_KEY` est employée).
+- `--timeout <s>` / `--ready-timeout <s>` / `--request-timeout <s>` : ajustent les budgets temps si la machine est lente.
+
+## Runbook (pannes courantes)
+
+1. **UNC inaccessible** : vérifier que `DATA_PIPELINE_ROOT` pointe vers un partage disponible (`Test-Path \\bricesodini\Savoirs\03_data_pipeline`). Sans accès réseau, les docs sont “MISSING”.
+2. **API key mismatch** : si `CONTROL_ROOM_API_KEY` est défini, tout appel REST/WS doit inclure `X-API-KEY`. Réexécuter `setx CONTROL_ROOM_API_KEY "..."` puis relancer le backend.
+3. **Venv / dépendances manquantes** : lancer `pip install -r control_room/backend/requirements.txt -r transcribe-suite/requirements-dev.txt` puis `bin\control_room_smoke.bat`.
+4. **Port bloqué (firewall)** : autoriser le port (par défaut 8787) dans “Windows Defender Firewall → New inbound rule → Port TCP 8787”.
+5. **Doc verrouillé** : si un job write tourne (`status-badge “Verrouillé”`), patienter ou annuler via `/api/v1/jobs/{id}/cancel`. Pour un blocage persistant, redémarrer le backend libère les locks mémoire.
 
 ## Environment variables
 
@@ -115,5 +142,20 @@ Security guardrails:
 - All commands (ASR / Lexicon / RAG) are executed inside the Transcribe Suite venv; the control room never runs foreign binaries.
 - Failure reasons are normalized (token missing, UNC unreachable, mojibake, etc.) and surfaced in job responses so the UI can suggest remediation steps.
 - Logs are downloadable (`/api/jobs/{id}/log/file`) and streamed via WebSocket (`/ws/jobs/{id}`) for quick triage.
+
+## ✅ Definition of Done — Cleanup phase (Control Room)
+
+- `bin\qa_check.bat` / `./bin/qa_check.sh` doivent passer (pytest Transcribe Suite + Control Room, smoke `/api/v1/*`, audit dépôt dry-run `cleanup_repo --dry-run --fail-on-legacy`, audit NAS si `DATA_PIPELINE_ROOT` est accessible). Chaque run écrit `logs/qa_check_<timestamp>.log`.
+- Les vérifications manuelles minimales : `python -m pytest tests/control_room`, `bin\control_room_smoke.bat --port 8899`, `bin\cleanup_repo.bat --dry-run --fail-on-legacy`.
+- Toute exécution `cleanup_repo --apply` doit obligatoirement passer par `bin\cleanup_stage.(bat|sh)` : la commande clone le dépôt dans `../transcribe-suite__cleanup_stage_<timestamp>` puis lance `cleanup_repo --apply --no-dry-run` sur cette copie (jamais sur la source).
+- Les rapports d’audit (`cleanup_audit`, `nas_audit`) sont écrits dans `logs/cleanup_*` par défaut. Utilisez `--write-docs` seulement quand vous voulez versionner `docs/*.md`.
+- Les actions Storage (API `/api/v1/storage` + onglet UI) restent **read-only** : toute purge/archivage passe par les scripts batch NAS existants puis un staging apply.
+
+## Cleanup phase — DONE
+
+- La phase cleanup est déclarée terminée : `bin\qa_check.(bat|sh)` fournit l’état officiel (OK/KO) sans inspection manuelle.
+- Aucune exécution `cleanup_repo --apply` n’est autorisée sur le dépôt réel ; passez impérativement par `bin\cleanup_stage.(bat|sh)` qui travaille sur une copie staging.
+- Les rapports restent dans `logs/cleanup_*` sauf si `--write-docs` est demandé explicitement.
+- Storage et `/api/v1/storage` sont des vues read-only ; les opérations NAS restent gérées par les batchs existants.
 
 Happy transcribing!

@@ -3,6 +3,7 @@ import DashboardPage from "./pages/DashboardPage";
 import DocumentsPage from "./pages/DocumentsPage";
 import DocumentDetailPage from "./pages/DocumentDetailPage";
 import JobsPage from "./pages/JobsPage";
+import StoragePage from "./pages/StoragePage";
 import NavBar from "./components/NavBar";
 
 function App() {
@@ -16,6 +17,7 @@ function App() {
             <Route path="/docs" element={<DocumentsPage />} />
             <Route path="/docs/:docName" element={<DocumentDetailPage />} />
             <Route path="/jobs" element={<JobsPage />} />
+            <Route path="/storage" element={<StoragePage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
@@ -25,4 +27,3 @@ function App() {
 }
 
 export default App;
-

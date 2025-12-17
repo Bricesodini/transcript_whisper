@@ -10,6 +10,7 @@ from textnorm import TextNormalizer, join_text
 NBSP = "\u00A0"
 _FRENCH_PUNCT_GAP = re.compile(r"([.!?])([A-Za-z\u00C0-\u017F])")
 _MULTI_SPACE = re.compile(r"[ \t]{2,}")
+LEADING_GUARDS = set('«»"\'“”‚‘„’()[]{}—–-•·¶®¶¯')
 
 
 def _normalize_ellipsis(text: str) -> str:
@@ -158,6 +159,27 @@ def _normalize_list_markers(text: str, bullet: str) -> str:
     return pattern.sub(lambda match: f"{match.group(1)}{bullet} ", text)
 
 
+def _capitalize_leading(text: str) -> str:
+    if not text:
+        return text
+    stripped = text.lstrip()
+    if not stripped:
+        return text
+    lead_ws = len(text) - len(stripped)
+    idx = 0
+    guards = LEADING_GUARDS | {NBSP}
+    while idx < len(stripped) and stripped[idx] in guards:
+        idx += 1
+    while idx < len(stripped) and stripped[idx].isspace():
+        idx += 1
+    if idx >= len(stripped):
+        return text
+    prefix = stripped[:idx]
+    remainder = stripped[idx:]
+    capitalized = prefix + _capitalize_word(remainder)
+    return text[:lead_ws] + capitalized
+
+
 class Polisher:
     def __init__(
         self,
@@ -238,6 +260,7 @@ class Polisher:
                 text, marker_hits = self._strip_oral_markers(text)
                 if marker_hits:
                     self._report["oral_markers_removed"] += marker_hits
+                    text = _capitalize_leading(text)
             if replacements:
                 text = _apply_replacements(text, replacements)
             if self.lexicon_rules:
