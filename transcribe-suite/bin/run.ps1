@@ -52,6 +52,29 @@ if ($env:PYTHONPATH) {
     $env:PYTHONPATH = "$rootDir\src"
 }
 
+$ragCommands = @('rag', 'rag-export')
+$firstArg = $null
+if ($Args -and $Args.Length -gt 0) {
+    $firstArg = $Args[0]
+}
+
+if ($firstArg) {
+    $normalized = $firstArg.ToLowerInvariant()
+    if ($ragCommands -contains $normalized) {
+        $ragConfigPath = [System.IO.Path]::Combine($rootDir, 'config', 'rag.yaml')
+        $ragArgs = @()
+        if ($Args.Length -gt 1) {
+            $ragArgs = $Args[1..($Args.Length - 1)]
+        }
+        $resolvedRagArgs = @("$rootDir\src\rag_export\cli.py", "--config", $ragConfigPath)
+        if ($ragArgs.Length -gt 0) {
+            $resolvedRagArgs += $ragArgs
+        }
+        & $python @resolvedRagArgs
+        exit $LASTEXITCODE
+    }
+}
+
 $resolvedArgs = @("$rootDir\src\pipeline.py", "--config", $configPath)
 if ($Args) { $resolvedArgs += $Args }
 

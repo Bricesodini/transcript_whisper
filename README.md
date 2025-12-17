@@ -22,6 +22,11 @@ bin/env_check.sh   # sur Windows, utiliser bin\env_check.bat
 
 > **Windows** : utilisez `bin\run.bat` (ou `powershell -File bin\run.ps1 …`) pour lancer la pipeline sans dépendre de Bash.
 
+### Déploiement macOS / Windows
+
+- **macOS / Linux** : bash natif (`bin/run.sh`, `bin/setup.sh`, etc.) ; utilisez `source .venv/bin/activate` pour activer l’environnement Python.
+- **Windows** : privilégier `bin\run.bat` (wrappe `run.ps1` + `pipeline.py`) ou directement `powershell -ExecutionPolicy Bypass -File bin\run.ps1 …`. Les .sh restent utiles via WSL Git-Bash mais ne sont pas requis.
+
 **Sorties** dans un dossier `TRANSCRIPT - <NomDuFichier>` créé à côté du média :
 
 - `.md` (sections/titres/résumés, Obsidian-ready)
@@ -42,6 +47,89 @@ Les exports « livrables » restent `md/json/vtt` ; tous les autres fichiers
 👉 Référence complète du mode stable : `docs/STABLE_BASE.md` (versions, flags autorisés, procédures de reprise).
 
 ---
+
+## 📦 Export RAG (vertical slice)
+
+Sans relancer l'ASR, `rag-export` transforme un document existant (`work/<doc>` + `TRANSCRIPT - <doc>`) en artefacts RAG versionnés et déterministes :
+
+```bash
+cd transcribe-suite
+bin/run.sh rag --input "work/Mon Doc" --dry-run      # inspection
+bin/run.sh rag --input "work/Mon Doc" --force        # génération
+# Windows : bin\run.bat rag --input "..." [--force]
+bin/run.sh rag doctor --input "RAG-MonDoc/0.1.0"     # validation des artefacts
+bin/run.sh rag query --input "RAG-MonDoc/0.1.0" --query "installation" --top-k 5
+```
+
+Entrées acceptées : dossier `work/<doc>`, dossier `TRANSCRIPT - <doc>` ou fichier média original (le résolveur retrouve `work/<doc>`).  
+Configuration : `config/rag.yaml` (globale) + override optionnel `work/<doc>/rag.config.yaml`. Chaque flag CLI écrase la config effective (ex. `--no-sqlite`).
+
+Options principales :
+
+- `--base-url https://video.tld/watch?v=42` : base pour les citations (`{base_url}?t=<start>`).
+- `--lang fr` : langue forcée (sinon `auto` via segments).
+- `--version-tag v1` : écrit dans `RAG-<doc>/v1/`.
+- `--doc-id custom_slug` : impose le doc_id.
+- `--no-sqlite` : désactive `lexical.sqlite`.
+- `--dry-run` : inspection (aucun fichier écrit).
+- `--force` : autorise l’écrasement du dossier ciblé.
+- `--real-timestamps` : si précisé, `generated_at` et `README` reflètent l’heure UTC réelle; sinon ils restent déterministes (`1970-01-01T00:00:00Z` via `deterministic_mode=true` + `timestamps_policy="epoch"` dans `document.json`).
+
+Arborescence générée :
+
+```
+RAG/
+  RAG-<doc_id>/
+    <schema_or_tag>/
+      document.json          # manifeste (sources, stats, config)
+      segments.jsonl         # segments normalisés (timestamps, confiance)
+      chunks.jsonl           # chunks + citations + tags low_conf
+      chunks_for_llm.jsonl   # optionnel (config.rag.chunks.llm_chunks_enabled)
+      lexical.sqlite         # index FTS5 (désactivable via --no-sqlite)
+      quality.json           # métriques santé (coverage, confiance, refs)
+      README_RAG.md          # résumé humain + rappel des fichiers
+```
+
+Chaque exécution est idempotente (UTC figé par run). Si le dossier cible existe déjà, `rag` refuse l'écrasement sans `--force`; `--version-tag <tag>` écrit dans `RAG-<doc>/<tag>/`.
+
+### Validation avec `rag doctor`
+
+```
+bin/run.sh rag doctor --input "RAG-MonDoc/0.1.0"
+bin/run.sh rag doctor --input "work/Mon Doc" --version-tag 0.1.0
+```
+
+- Vérifie la présence/lecture des fichiers (`document.json`, `segments.jsonl`, `chunks.jsonl`, `quality.json`, `README_RAG.md`, `lexical.sqlite` si activé).
+- Contrôle les références croisées (chunk → segments), la couverture temporelle, la cohérence de `document.json` (provenance, schéma) et exécute une requête FTS5 de test (`health.sample_queries` dans `config/rag.yaml`, par défaut `installation`/`the`).
+- Retourne un code non nul en cas d'erreur (pratique pour CI). Les avertissements (couverture faible, requêtes sans résultat) n'interrompent pas le script.
+
+### Recherche rapide avec `rag query`
+
+```
+bin/run.sh rag query --input "RAG-MonDoc/0.1.0" --query "installation" --top-k 5
+```
+
+- Tire parti de `lexical.sqlite` (FTS5) pour vérifier rapidement qu'un terme existe dans les chunks.
+- Retourne les `chunk_id`, timestamps et citations au format CLI (aucune génération LLM).
+- Idéal pour valider la qualité d'un export RAG avant ingestion : exécuter `rag doctor`, puis `rag query` avec vos mots-clés.
+
+### Politique de timestamps et manifeste
+
+- Par défaut, `rag-export` force un timestamp déterministe (`1970-01-01T00:00:00Z`) et marque `document.json` avec `deterministic_mode=true` + `timestamps_policy="epoch"`.
+- `--real-timestamps` capture l’horodatage UTC réel et positionne `deterministic_mode=false`, `timestamps_policy="real"` ; la reproductibilité byte-égale n’est alors plus garantie.
+- Tous les manifestes incluent également `provenance` (SHA-256 des inputs) et `config_effective.yaml` + son hash pour tracer la config exacte.
+
+👉 Détails pratiques, chemins UNC Windows/Share et checklist NAS : `docs/RAG_WINDOWS_VALIDATION.md`.
+
+### Extension PDF (design à venir)
+
+- Les exports vidéo existants servent de base : mêmes artefacts (`document.json`, `chunks.jsonl`, `quality.json`, `lexical.sqlite`, etc.).
+- Pour un PDF, les citations utilisent un champ `locator` permettant `type: "time"` ou `type: "page"` (`start` / `end` numériques, voir `docs/RAG_PDF_DESIGN.md`).
+- `chunks.jsonl` reste strictement compatible entre vidéo et PDF : seule la forme du locator change (timecodes ou numéros de page).
+
+👉 Spécification détaillée et scénarios de migration : `docs/RAG_PDF_DESIGN.md`.
+
+--- 
 
 ## 🧹 Post-traitement & QA éditoriale
 

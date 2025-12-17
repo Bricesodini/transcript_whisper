@@ -1,0 +1,3 @@
+Bonjour a tous et bienvenue dans ce test de RAG export avec une installation propre.
+Nous voulons produire des segments fiables et deterministes pour documenter chaque installation.
+Enfin, nous verifierons que les chunks incluent bien leurs citations horodatees.

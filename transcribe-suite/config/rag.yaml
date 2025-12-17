@@ -1,0 +1,39 @@
+rag:
+  schema_version: "0.1.0"
+  output_dir: "RAG"
+  export_dir_prefix: "RAG-"
+  default_lang: auto
+  doc_id:
+    slug_max_length: 72
+    hash_length: 8
+    fallback_hash_length: 12
+  chunks:
+    target_tokens: 480
+    overlap_tokens: 80
+    llm_chunks_enabled: false
+  quality:
+    threshold_warn: 0.6
+    threshold_error: 0.45
+  index:
+    enable_sqlite: true
+    enable_embeddings: false
+    sqlite:
+      page_size: 32768
+      vacuum_on_close: false
+  citations:
+    base_url: null
+    url_template: "{base_url}?t={start_s}s"
+    text_format: "{title} [{start_mmss}-{end_mmss}]"
+    markdown_format: "[Voir extrait]({url}) ({start_mmss}-{end_mmss})"
+  health:
+    coverage_target_pct: 0.95
+    sample_queries:
+      - "installation"
+      - "the"
+  versioning:
+    allow_force: true
+    default_strategy: "error"
+    version_tag_format: "{doc_id}-{timestamp}"
+  logging:
+    diff_stats: true
+    log_dir: logs/rag

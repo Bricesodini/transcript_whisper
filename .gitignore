@@ -9,6 +9,7 @@ transcribe-suite/out/
 transcribe-suite/logs/
 transcribe-suite/exports/
 transcribe-suite/results/
+transcribe-suite/RAG/
 
 # --- Working / temporary directories ---
 transcribe-suite/work/
