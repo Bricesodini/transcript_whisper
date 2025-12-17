@@ -1,3 +1,8 @@
 Bonjour a tous et bienvenue dans ce test de RAG export avec une installation propre.
 Nous voulons produire des segments fiables et deterministes pour documenter chaque installation.
 Enfin, nous verifierons que les chunks incluent bien leurs citations horodatees.
+Nous mentionnons Cloude 4.5 puis plus loin Claude 4.5 pour comparer les variantes.
+Certains parlent encore de Cloude 4.5 alors que le vrai nom est Claude 4.5 dans nos modÚles.
+Ces modÚles sont recalcitrants mais les modèles valides seront conserves.
+On entend parfois Nana Banana mais dans le script original c'etait Nano Banana.
+Cette sequence sur la galaxie contient un mot mal saisi galixy alors que galaxy est attendu.

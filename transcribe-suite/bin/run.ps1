@@ -66,7 +66,7 @@ if ($firstArg) {
         if ($Args.Length -gt 1) {
             $ragArgs = $Args[1..($Args.Length - 1)]
         }
-        $resolvedRagArgs = @("$rootDir\src\rag_export\cli.py", "--config", $ragConfigPath)
+        $resolvedRagArgs = @("-m", "rag_export.cli", "--config", $ragConfigPath)
         if ($ragArgs.Length -gt 0) {
             $resolvedRagArgs += $ragArgs
         }

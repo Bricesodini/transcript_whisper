@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
-import { DocInfo, DocState, ProfilesResponse } from "../types";
+import { DocInfo, DocState, ProfilesPayload } from "../types";
 
 const stateLabels: Record<DocState, string> = {
   MISSING: "Manquant",
@@ -16,7 +16,7 @@ const DocumentsPage = () => {
   const [docs, setDocs] = useState<DocInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [profiles, setProfiles] = useState<ProfilesResponse | null>(null);
+  const [profiles, setProfiles] = useState<ProfilesPayload | null>(null);
   const [lexiconProfile, setLexiconProfile] = useState<string>("default");
   const [ragProfile, setRagProfile] = useState<string>("default");
 

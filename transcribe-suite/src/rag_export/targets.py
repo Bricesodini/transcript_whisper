@@ -9,6 +9,7 @@ from utils import PipelineError
 
 from . import PROJECT_ROOT, RAG_SCHEMA_VERSION
 from .doc_id import resolve_doc_id
+from .pipeline import resolve_rag_output_override
 from .resolver import InputResolver
 
 
@@ -61,7 +62,11 @@ def resolve_rag_directory(
 
 
 def _resolve_output_root(config: dict) -> Path:
-    output_dir = Path(config.get("output_dir") or "RAG")
+    override = resolve_rag_output_override()
+    if override:
+        output_dir = override
+    else:
+        output_dir = Path(config.get("output_dir") or "RAG")
     if not output_dir.is_absolute():
         output_dir = (PROJECT_ROOT / output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)

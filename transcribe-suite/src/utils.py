@@ -254,7 +254,7 @@ def copy_to_clipboard(text: str, logger: logging.Logger) -> None:
 
 def write_json(path: Path, payload: Any, indent: int = 2, sort_keys: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
+    with path.open("w", encoding="utf-8", newline="\n") as f:
         json.dump(payload, f, ensure_ascii=False, indent=indent, sort_keys=sort_keys)
         f.write("\n")
 

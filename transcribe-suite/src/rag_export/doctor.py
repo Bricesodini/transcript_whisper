@@ -13,7 +13,9 @@ from utils import PipelineError, setup_logger
 from . import PROJECT_ROOT, RAG_SCHEMA_VERSION
 from .configuration import ConfigBundle
 from .generation import rel_path
+from .pipeline import resolve_rag_output_override
 from .targets import resolve_rag_directory
+from .text_processing import detect_mojibake
 
 
 @dataclass
@@ -35,9 +37,12 @@ class RAGDoctor:
         self.log_dir = self._resolve_log_dir()
         run_name = self._build_run_name()
         self.logger = setup_logger(self.log_dir, run_name, log_level=log_level)
+        self.quality_cfg = self.config.get("quality") or {}
         health_cfg = self.config.get("health") or {}
         self.coverage_target = float(health_cfg.get("coverage_target_pct") or 0.0)
+        self.encoding_sample_size = max(1, int(health_cfg.get("encoding_sample_size") or 32))
         self.sample_queries: List[str] = [q for q in health_cfg.get("sample_queries", []) if q]
+        self.avg_conf_threshold = float(self.quality_cfg.get("threshold_warn") or 0.0)
 
     def run(self) -> bool:
         target_dir = resolve_rag_directory(
@@ -75,6 +80,11 @@ class RAGDoctor:
         if segments is not None and chunks is not None:
             self._validate_chunks(chunks, segments, issues)
             self._validate_coverage(chunks, segments, manifest, warnings)
+        if chunks:
+            self._check_encoding(chunks, issues)
+            self._check_quality_metrics(chunks, warnings)
+        if manifest:
+            self._check_glossary_suggestion(manifest, warnings)
 
         sqlite_expected = self._should_expect_sqlite(manifest)
         sqlite_path = target_dir / "lexical.sqlite"
@@ -105,7 +115,11 @@ class RAGDoctor:
         return True
 
     def _resolve_output_root(self) -> Path:
-        output_dir = Path(self.config.get("output_dir") or "RAG")
+        override = resolve_rag_output_override()
+        if override:
+            output_dir = override
+        else:
+            output_dir = Path(self.config.get("output_dir") or "RAG")
         if not output_dir.is_absolute():
             output_dir = (PROJECT_ROOT / output_dir).resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -200,6 +214,34 @@ class RAGDoctor:
         if self.coverage_target and coverage < self.coverage_target:
             warnings.append(f"Couverture temporelle faible ({coverage:.2%} < {self.coverage_target:.2%}).")
 
+    def _check_encoding(self, chunks: List[Dict[str, Any]], issues: List[str]) -> None:
+        total = len(chunks)
+        if total == 0:
+            return
+        sample_size = min(self.encoding_sample_size, total)
+        if sample_size <= 0:
+            return
+        step = max(1, total // sample_size)
+        sampled = 0
+        for idx in range(0, total, step):
+            chunk = chunks[idx]
+            text = chunk.get("text") or ""
+            if detect_mojibake(text):
+                issues.append(f"Mojibake détecté dans chunk {chunk.get('chunk_id')}.")
+                return
+            sampled += 1
+            if sampled >= sample_size:
+                break
+
+    def _check_quality_metrics(self, chunks: List[Dict[str, Any]], warnings: List[str]) -> None:
+        confidences = [float(chunk.get("confidence")) for chunk in chunks if chunk.get("confidence") is not None]
+        if confidences:
+            avg_conf = sum(confidences) / len(confidences)
+            if self.avg_conf_threshold and avg_conf < self.avg_conf_threshold:
+                warnings.append(
+                    f"Confiance moyenne faible ({avg_conf:.3f} < {self.avg_conf_threshold:.3f})."
+                )
+
     def _should_expect_sqlite(self, manifest: Optional[Dict[str, Any]]) -> bool:
         index_cfg = self.config.get("index") or {}
         if not index_cfg.get("enable_sqlite", True):
@@ -220,6 +262,7 @@ class RAGDoctor:
             if not cursor.fetchone():
                 issues.append("Index FTS5 manquant dans lexical.sqlite.")
                 return
+            self._validate_fts_accents(conn, issues)
             queries = self.sample_queries or ["installation", "the"]
             matched = False
             for query in queries:
@@ -237,3 +280,46 @@ class RAGDoctor:
                     conn.close()
             except Exception:
                 pass
+
+    def _validate_fts_accents(self, conn: sqlite3.Connection, issues: List[str]) -> None:
+        cursor = conn.cursor()
+        test_id = "__doctor_ftstest__"
+        ok = True
+        try:
+            cursor.execute("BEGIN")
+            cursor.execute(
+                "INSERT INTO chunks_fts(chunk_id, doc_id, text) VALUES (?, ?, ?)",
+                (test_id, "__doctor__", "créer un enregistrement de test pour les accents"),
+            )
+            cursor.execute("SELECT 1 FROM chunks_fts WHERE chunks_fts MATCH ?", ("creer",))
+            ok = cursor.fetchone() is not None
+        except sqlite3.DatabaseError as exc:
+            issues.append(f"Test FTS accents impossible: {exc}")
+            ok = None
+        finally:
+            try:
+                conn.rollback()
+            except sqlite3.DatabaseError:
+                pass
+        if ok is False:
+            issues.append("FTS SQLite ne gère pas les accents (recherche 'creer' != 'créer').")
+
+    def _check_glossary_suggestion(self, manifest: Dict[str, Any], warnings: List[str]) -> None:
+        work_dir = self._resolve_manifest_work_dir(manifest)
+        if not work_dir:
+            return
+        suggested = work_dir / "rag.glossary.suggested.yaml"
+        validated = work_dir / "rag.glossary.yaml"
+        if suggested.exists() and not validated.exists():
+            warnings.append("Glossaire suggéré détecté mais non validé (rag.glossary.yaml manquant).")
+
+    def _resolve_manifest_work_dir(self, manifest: Dict[str, Any]) -> Optional[Path]:
+        provenance = manifest.get("provenance") or {}
+        segments = provenance.get("segments") or {}
+        path_str = segments.get("path")
+        if not path_str:
+            return None
+        candidate = (PROJECT_ROOT / path_str).resolve()
+        if candidate.exists():
+            return candidate.parent
+        return None

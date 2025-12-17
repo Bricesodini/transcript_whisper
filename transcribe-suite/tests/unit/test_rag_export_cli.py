@@ -42,8 +42,23 @@ rag:
     url_template: "{{base_url}}?t={{start_s}}s"
     text_format: "{{title}} [{{start_mmss}}-{{end_mmss}}]"
     markdown_format: "[Voir extrait]({{url}}) ({{start_mmss}}-{{end_mmss}})"
+  text_normalization:
+    embedding_view:
+      enabled: true
+      output_filename: "chunks_for_embedding.jsonl"
+    acronym_whitelist:
+      - IA
+      - HTML
+      - CSS
+      - API
+      - ChatGPT
+      - Claude
+    glossary:
+      - pattern: '(?i)cloud 4\\.5'
+        replacement: 'Claude 4.5'
   health:
     coverage_target_pct: 0.95
+    encoding_sample_size: 16
     sample_queries: []
   versioning:
     allow_force: true
@@ -57,13 +72,15 @@ rag:
     return cfg_path, output_root
 
 
-def _run_cli(args, *, cwd=PROJECT_ROOT, check: bool = True):
+def _run_cli(args, *, cwd=PROJECT_ROOT, check: bool = True, extra_env=None):
     cmd = [sys.executable, "-m", "rag_export.cli"]
     cmd.extend(args)
     env = os.environ.copy()
     src_path = str((PROJECT_ROOT / "src").resolve())
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = src_path if not existing else f"{src_path}{os.pathsep}{existing}"
+    if extra_env:
+        env.update(extra_env)
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
     if check and result.returncode != 0:
         raise AssertionError(f"rag-export failed ({result.returncode}): {result.stderr}\n{result.stdout}")
@@ -109,6 +126,15 @@ def test_rag_export_generates_artifacts(tmp_path):
     assert (target_dir / "quality.json").exists()
     assert (target_dir / "README_RAG.md").exists()
     assert (target_dir / "lexical.sqlite").exists()
+    embedding_path = target_dir / "chunks_for_embedding.jsonl"
+    assert embedding_path.exists()
+    embedding_rows = [
+        json.loads(line) for line in embedding_path.read_text(encoding="utf-8").strip().splitlines() if line.strip()
+    ]
+    assert embedding_rows, "embedding view should contain at least one record"
+    assert embedding_rows[0]["text_raw"]
+    assert embedding_rows[0]["text_norm"]
+    assert "  " not in embedding_rows[0]["text_norm"]
 
 
 def test_rag_export_idempotent(tmp_path):
@@ -155,6 +181,24 @@ def test_rag_doctor_missing_file(tmp_path):
     assert result.returncode != 0
 
 
+def test_rag_doctor_detects_mojibake(tmp_path):
+    cfg_path, _, work_dir, _, target_dir = _prepare_export(tmp_path)
+    _run_cli(["--input", str(work_dir), "--config", str(cfg_path)])
+    chunks_path = target_dir / "chunks.jsonl"
+    rows = [
+        json.loads(line)
+        for line in chunks_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rows[0]["text"] = "FranÃ§ais mojibakÃ©"
+    with chunks_path.open("w", encoding="utf-8", newline="\n") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=False))
+            fh.write("\n")
+    result = _run_cli(["doctor", "--input", str(target_dir), "--config", str(cfg_path)], check=False)
+    assert result.returncode != 0
+
+
 def test_sqlite_fts_query_smoke(tmp_path):
     cfg_path, _, work_dir, _, target_dir = _prepare_export(tmp_path)
     _run_cli(["--input", str(work_dir), "--config", str(cfg_path)])
@@ -187,3 +231,21 @@ def test_rag_query_missing_db(tmp_path):
         check=False,
     )
     assert result.returncode != 0
+
+
+def test_rag_export_pipeline_root_override(tmp_path):
+    cfg_path, _, work_dir, doc_id, _ = _prepare_export(tmp_path)
+    pipeline_root = tmp_path / "pipeline_root"
+    pipeline_root.mkdir()
+    extra_env = {"DATA_PIPELINE_ROOT": str(pipeline_root)}
+    _run_cli(["--input", str(work_dir), "--config", str(cfg_path), "--force"], extra_env=extra_env)
+    override_dir = pipeline_root / "03_output_RAG" / f"RAG-{doc_id}" / RAG_SCHEMA_VERSION
+    assert override_dir.exists()
+    assert (override_dir / "document.json").exists()
+
+
+def test_rag_export_without_pipeline_root_keeps_default(tmp_path):
+    cfg_path, output_root, work_dir, _, target_dir = _prepare_export(tmp_path)
+    _run_cli(["--input", str(work_dir), "--config", str(cfg_path)])
+    assert target_dir.exists()
+    assert not any((output_root.parent / "03_output_RAG").glob("RAG-*"))

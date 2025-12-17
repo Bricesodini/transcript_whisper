@@ -13,6 +13,12 @@ from . import CONFIG_DIR, DEFAULT_CONFIG_FILENAME
 from .configuration import RAGConfigLoader, find_doc_override
 from .doctor import RAGDoctor, RAGDoctorOptions
 from .query import RAGQuery, RAGQueryOptions
+from .lexicon_scan import (
+    LexiconApplyCommand,
+    LexiconApplyOptions,
+    LexiconScanOptions,
+    LexiconScanner,
+)
 from .runner import RAGExportOptions, RAGExportRunner
 
 
@@ -24,9 +30,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "action",
         nargs="?",
-        choices=["export", "doctor", "query"],
+        choices=["export", "doctor", "query", "lexicon"],
         default="export",
         help="Action à exécuter (export par défaut).",
+    )
+    parser.add_argument(
+        "lexicon_action",
+        nargs="?",
+        choices=["scan", "apply"],
+        help="Action lexicon (scan/apply).",
     )
     parser.add_argument("--input", required=True, help="Chemin vers work/<doc>, TRANSCRIPT - <doc> ou dossier RAG.")
     parser.add_argument(
@@ -49,7 +61,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Utilise l'heure UTC courante (sinon timestamps déterministes).",
     )
     parser.add_argument("--query", dest="query_text", help="Requête lexicale (action query).")
-    parser.add_argument("--top-k", type=int, default=5, help="Nombre de résultats max pour rag query (défaut=5).")
+    parser.add_argument("--top-k", type=int, help="Nombre de résultats max pour rag query (défaut=5).")
+    parser.add_argument("--min-count", dest="lexicon_min_count", type=int, help="Seuil de fréquence pour lexicon scan.")
+    parser.add_argument("--out", dest="lexicon_out", help="Fichier de sortie pour les suggestions lexicon.")
+    parser.add_argument(
+        "--from",
+        dest="lexicon_from_path",
+        help="Fichier source rag.glossary.suggested.yaml pour lexicon apply.",
+    )
+    parser.add_argument(
+        "--to",
+        dest="lexicon_to_path",
+        help="Fichier cible rag.glossary.yaml pour lexicon apply.",
+    )
+    parser.add_argument(
+        "--keep-top",
+        dest="lexicon_keep_top",
+        type=int,
+        help="Nombre maximum de règles à conserver lors du lexicon apply.",
+    )
     return parser
 
 
@@ -93,15 +123,43 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.action == "query":
             if not args.query_text:
                 raise PipelineError("--query est obligatoire pour l'action query.")
+            top_k = args.top_k if args.top_k is not None else 5
             query_options = RAGQueryOptions(
                 input_path=input_path,
                 query=args.query_text,
-                top_k=max(1, int(args.top_k or 5)),
+                top_k=max(1, int(top_k)),
                 version_tag=args.version_tag,
                 doc_id_override=args.doc_id,
             )
             query_runner = RAGQuery(query_options, config_bundle, log_level=args.log_level)
             query_runner.run()
+            return 0
+        if args.action == "lexicon":
+            if not args.lexicon_action:
+                raise PipelineError("Préciser l'action lexicon (scan ou apply).")
+            if args.lexicon_action == "scan":
+                lex_top_k = args.top_k if args.top_k is not None else 200
+                scan_options = LexiconScanOptions(
+                    input_path=input_path,
+                    min_count=max(1, int(args.lexicon_min_count or 2)),
+                    top_k=max(1, int(lex_top_k)),
+                    output_path=Path(args.lexicon_out).expanduser().resolve() if args.lexicon_out else None,
+                    doc_id_override=args.doc_id,
+                    version_tag=args.version_tag,
+                )
+                scanner = LexiconScanner(scan_options, config_bundle, log_level=args.log_level)
+                scanner.run()
+                return 0
+            apply_options = LexiconApplyOptions(
+                input_path=input_path,
+                source_path=Path(args.lexicon_from_path).expanduser().resolve() if args.lexicon_from_path else None,
+                target_path=Path(args.lexicon_to_path).expanduser().resolve() if args.lexicon_to_path else None,
+                keep_top=args.lexicon_keep_top,
+                doc_id_override=args.doc_id,
+                version_tag=args.version_tag,
+            )
+            applier = LexiconApplyCommand(apply_options, config_bundle, log_level=args.log_level)
+            applier.run()
             return 0
 
         options = RAGExportOptions(

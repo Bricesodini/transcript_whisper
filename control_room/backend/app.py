@@ -45,6 +45,21 @@ from .preview import preview_with_timeout
 from .profiles import ProfilesConfig, load_profiles
 from .resolver import DocPaths, ResolverError, resolve_doc
 from .runner import JobManager
+from .schemas import (
+    APIEnvelope,
+    APIError,
+    CancelPayload,
+    CommandPreviewPayload,
+    DocDetailPayload,
+    DocsPayload,
+    FilesPayload,
+    JobPayload,
+    JobsPayload,
+    LogPayload,
+    PreviewPayload,
+    ProfilesPayload,
+    SuggestedPayload,
+)
 from .settings import get_settings
 
 API_VERSION = "v1"
@@ -58,7 +73,7 @@ api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
 
 async def verify_api_key(api_key: Optional[str] = Depends(api_key_header)) -> None:
     if settings.api_key and api_key != settings.api_key:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+        raise_api_error("unauthorized", "Invalid API key", status_code=401)
 
 
 def create_app() -> FastAPI:
@@ -79,88 +94,19 @@ def create_app() -> FastAPI:
             "/static",
             StaticFiles(directory=settings.frontend_dist_dir),
             name="static",
-        )
+    )
 
     register_routes(app)
+    register_exception_handlers(app)
     return app
 
 
-class APIEnvelope(BaseModel):
-    api_version: str = API_VERSION
-    ok: bool = True
-    data: Any = None
-    error: Optional[str] = None
+def success(data: Any = None) -> APIEnvelope:
+    return APIEnvelope(data=data)
 
 
-class APIResponse(BaseModel):
-    api_version: str = API_VERSION
-
-
-class ProfilesResponse(APIResponse):
-    profiles: ProfilesConfig
-
-
-class DocsResponse(APIResponse):
-    items: List[DocInfo]
-
-
-class DocDetailResponse(APIResponse):
-    doc: DocInfo
-
-
-class FilesResponse(APIResponse):
-    files: List[Dict[str, Any]]
-
-
-class SuggestedResponse(APIResponse):
-    rules: List[Dict[str, Any]]
-    etag: Optional[str]
-
-
-class PreviewResponse(APIResponse):
-    preview: Dict[str, Any]
-
-
-class JobResponse(APIResponse):
-    job: JobRecord
-
-
-class JobsResponse(APIResponse):
-    jobs: List[JobRecord]
-
-
-class CommandPreviewResponse(APIResponse):
-    action: JobAction
-    argv: List[str]
-    cwd: Optional[Path]
-    doc_id: Optional[str]
-    profile_id: Optional[str]
-    artifacts: List[str]
-
-    class Config:
-        json_encoders = {Path: lambda v: str(v) if v else None}
-
-
-class LogResponse(APIResponse):
-    job_id: int
-    log: str
-
-
-class CancelResponse(APIResponse):
-    canceled: bool
-
-
-class CommandPreviewData(BaseModel):
-    action: JobAction
-    argv: List[str]
-    cwd: Optional[Path]
-    doc_id: Optional[str]
-    profile_id: Optional[str]
-    artifacts: List[str]
-    env_keys: List[str] = Field(default_factory=list)
-
-    class Config:
-        json_encoders = {Path: lambda v: str(v) if v else None}
+def raise_api_error(code: str, message: str, *, hint: Optional[str] = None, status_code: int = 400) -> None:
+    raise HTTPException(status_code=status_code, detail={"code": code, "message": message, "hint": hint})
 
 
 class GlossaryPayload(BaseModel):
@@ -221,44 +167,44 @@ def register_routes(app: FastAPI) -> None:
     async def health() -> Dict[str, str]:
         return {"status": "ok"}
 
-    @app.get("/api/v1/profiles", response_model=ProfilesResponse)
-    async def get_profiles() -> ProfilesResponse:
-        return ProfilesResponse(profiles=profiles_config)
+    @app.get("/api/v1/profiles", response_model=APIEnvelope)
+    async def get_profiles() -> APIEnvelope:
+        return success(ProfilesPayload(profiles=profiles_config))
 
-    @app.get("/api/v1/docs", response_model=DocsResponse)
-    async def list_docs_route() -> DocsResponse:
+    @app.get("/api/v1/docs", response_model=APIEnvelope)
+    async def list_docs_route() -> APIEnvelope:
         docs = scan_documents(settings, job_manager)
-        return DocsResponse(items=docs)
+        return success(DocsPayload(docs=docs))
 
-    @app.get("/api/v1/docs/{doc_name}", response_model=DocDetailResponse)
-    async def get_doc(doc_name: str) -> DocDetailResponse:
+    @app.get("/api/v1/docs/{doc_name}", response_model=APIEnvelope)
+    async def get_doc(doc_name: str) -> APIEnvelope:
         doc_paths = _get_doc_paths(doc_name)
         doc_info = build_doc_info(settings, job_manager, doc_paths)
-        return DocDetailResponse(doc=doc_info)
+        return success(DocDetailPayload(doc=doc_info))
 
-    @app.get("/api/v1/docs/{doc_name}/files", response_model=FilesResponse)
-    async def doc_files(doc_name: str) -> FilesResponse:
+    @app.get("/api/v1/docs/{doc_name}/files", response_model=APIEnvelope)
+    async def doc_files(doc_name: str) -> APIEnvelope:
         doc_paths = _get_doc_paths(doc_name)
-        return FilesResponse(files=list_key_files(doc_paths))
+        return success(FilesPayload(files=list_key_files(doc_paths)))
 
-    @app.get("/api/v1/docs/{doc_name}/suggested", response_model=SuggestedResponse)
-    async def doc_suggested(doc_name: str) -> SuggestedResponse:
+    @app.get("/api/v1/docs/{doc_name}/suggested", response_model=APIEnvelope)
+    async def doc_suggested(doc_name: str) -> APIEnvelope:
         doc_paths = _get_doc_paths(doc_name)
         suggested = doc_paths.suggested_glossary
         rules = load_rules(suggested) if suggested and suggested.exists() else []
         etag = compute_etag(suggested) if suggested else None
-        return SuggestedResponse(rules=rules, etag=etag)
+        return success(SuggestedPayload(rules=rules, etag=etag))
 
-    @app.put("/api/v1/docs/{doc_name}/validated")
-    async def save_validated(doc_name: str, payload: GlossaryPayload) -> APIResponse:
+    @app.put("/api/v1/docs/{doc_name}/validated", response_model=APIEnvelope)
+    async def save_validated(doc_name: str, payload: GlossaryPayload) -> APIEnvelope:
         doc_paths = _get_doc_paths(doc_name)
         if not doc_paths.work_dir:
-            raise HTTPException(status_code=400, detail="work_dir introuvable")
+            raise_api_error("work_dir_missing", "work_dir introuvable")
         validated_path = doc_paths.work_dir / "rag.glossary.yaml"
         doc_id = payload.doc_id or doc_paths.doc_id
         current_etag = compute_etag(doc_paths.suggested_glossary)
         if payload.etag and payload.etag != (current_etag or ""):
-            raise HTTPException(status_code=409, detail="Glossaire suggéré modifié. Rafraîchir.")
+            raise_api_error("suggested_changed", "Glossaire suggéré modifié. Rafraîchir.", status_code=409)
         try:
             save_validated_glossary(
                 validated_path,
@@ -268,13 +214,13 @@ def register_routes(app: FastAPI) -> None:
                 current_etag=current_etag,
             )
         except GlossaryValidationError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return APIResponse()
+            raise_api_error("glossary_invalid", str(exc))
+        return success({"doc": doc_id})
 
-    @app.get("/api/v1/docs/{doc_name}/preview", response_model=PreviewResponse)
+    @app.get("/api/v1/docs/{doc_name}/preview", response_model=APIEnvelope)
     async def doc_preview(
         doc_name: str, pattern: Optional[str] = None, replacement: Optional[str] = None
-    ) -> PreviewResponse:
+    ) -> APIEnvelope:
         doc_paths = _get_doc_paths(doc_name)
         source = load_preview_text(doc_paths)
         result = await preview_with_timeout(
@@ -283,18 +229,18 @@ def register_routes(app: FastAPI) -> None:
             replacement,
             settings.preview_timeout_ms,
         )
-        return PreviewResponse(preview=result)
+        return success(PreviewPayload(preview=result))
 
-    @app.post("/api/v1/run/asr-batch", response_model=JobResponse)
-    async def run_asr_batch(payload: AsrBatchRequest) -> JobResponse:
+    @app.post("/api/v1/run/asr-batch", response_model=APIEnvelope)
+    async def run_asr_batch(payload: AsrBatchRequest) -> APIEnvelope:
         return _schedule(lambda: build_asr_batch_command(settings, profiles_config, profile=payload.profile))
 
-    @app.post("/api/v1/run/asr-batch/dry-run", response_model=CommandPreviewResponse)
-    async def run_asr_batch_preview(payload: AsrBatchRequest) -> CommandPreviewResponse:
+    @app.post("/api/v1/run/asr-batch/dry-run", response_model=APIEnvelope)
+    async def run_asr_batch_preview(payload: AsrBatchRequest) -> APIEnvelope:
         return _preview(lambda: build_asr_batch_command(settings, profiles_config, profile=payload.profile))
 
-    @app.post("/api/v1/run/lexicon-batch", response_model=JobResponse)
-    async def run_lexicon_batch(payload: LexiconBatchRequest) -> JobResponse:
+    @app.post("/api/v1/run/lexicon-batch", response_model=APIEnvelope)
+    async def run_lexicon_batch(payload: LexiconBatchRequest) -> APIEnvelope:
         return _schedule(
             lambda: build_lexicon_batch_command(
                 settings,
@@ -308,8 +254,8 @@ def register_routes(app: FastAPI) -> None:
             )
         )
 
-    @app.post("/api/v1/run/lexicon-batch/dry-run", response_model=CommandPreviewResponse)
-    async def run_lexicon_batch_preview(payload: LexiconBatchRequest) -> CommandPreviewResponse:
+    @app.post("/api/v1/run/lexicon-batch/dry-run", response_model=APIEnvelope)
+    async def run_lexicon_batch_preview(payload: LexiconBatchRequest) -> APIEnvelope:
         return _preview(
             lambda: build_lexicon_batch_command(
                 settings,
@@ -323,8 +269,8 @@ def register_routes(app: FastAPI) -> None:
             )
         )
 
-    @app.post("/api/v1/run/rag-batch", response_model=JobResponse)
-    async def run_rag_batch(payload: RagBatchRequest) -> JobResponse:
+    @app.post("/api/v1/run/rag-batch", response_model=APIEnvelope)
+    async def run_rag_batch(payload: RagBatchRequest) -> APIEnvelope:
         return _schedule(
             lambda: build_rag_batch_command(
                 settings,
@@ -337,8 +283,8 @@ def register_routes(app: FastAPI) -> None:
             )
         )
 
-    @app.post("/api/v1/run/rag-batch/dry-run", response_model=CommandPreviewResponse)
-    async def run_rag_batch_preview(payload: RagBatchRequest) -> CommandPreviewResponse:
+    @app.post("/api/v1/run/rag-batch/dry-run", response_model=APIEnvelope)
+    async def run_rag_batch_preview(payload: RagBatchRequest) -> APIEnvelope:
         return _preview(
             lambda: build_rag_batch_command(
                 settings,
@@ -351,40 +297,40 @@ def register_routes(app: FastAPI) -> None:
             )
         )
 
-    @app.post("/api/v1/run/lexicon-scan", response_model=JobResponse)
-    async def run_lexicon_scan(payload: LexiconDocRequest) -> JobResponse:
+    @app.post("/api/v1/run/lexicon-scan", response_model=APIEnvelope)
+    async def run_lexicon_scan(payload: LexiconDocRequest) -> APIEnvelope:
         return _schedule(
             lambda: build_lexicon_scan_command(
                 settings, payload.doc, profile=payload.profile, profiles=profiles_config
             )
         )
 
-    @app.post("/api/v1/run/lexicon-scan/dry-run", response_model=CommandPreviewResponse)
-    async def run_lexicon_scan_preview(payload: LexiconDocRequest) -> CommandPreviewResponse:
+    @app.post("/api/v1/run/lexicon-scan/dry-run", response_model=APIEnvelope)
+    async def run_lexicon_scan_preview(payload: LexiconDocRequest) -> APIEnvelope:
         return _preview(
             lambda: build_lexicon_scan_command(
                 settings, payload.doc, profile=payload.profile, profiles=profiles_config
             )
         )
 
-    @app.post("/api/v1/run/lexicon-apply", response_model=JobResponse)
-    async def run_lexicon_apply(payload: LexiconDocRequest) -> JobResponse:
+    @app.post("/api/v1/run/lexicon-apply", response_model=APIEnvelope)
+    async def run_lexicon_apply(payload: LexiconDocRequest) -> APIEnvelope:
         return _schedule(
             lambda: build_lexicon_apply_command(
                 settings, payload.doc, profiles=profiles_config, profile=payload.profile
             )
         )
 
-    @app.post("/api/v1/run/lexicon-apply/dry-run", response_model=CommandPreviewResponse)
-    async def run_lexicon_apply_preview(payload: LexiconDocRequest) -> CommandPreviewResponse:
+    @app.post("/api/v1/run/lexicon-apply/dry-run", response_model=APIEnvelope)
+    async def run_lexicon_apply_preview(payload: LexiconDocRequest) -> APIEnvelope:
         return _preview(
             lambda: build_lexicon_apply_command(
                 settings, payload.doc, profiles=profiles_config, profile=payload.profile
             )
         )
 
-    @app.post("/api/v1/run/rag-export", response_model=JobResponse)
-    async def run_rag_export(payload: RagExportRequest) -> JobResponse:
+    @app.post("/api/v1/run/rag-export", response_model=APIEnvelope)
+    async def run_rag_export(payload: RagExportRequest) -> APIEnvelope:
         return _schedule(
             lambda: build_rag_export_command(
                 settings,
@@ -396,8 +342,8 @@ def register_routes(app: FastAPI) -> None:
             )
         )
 
-    @app.post("/api/v1/run/rag-export/dry-run", response_model=CommandPreviewResponse)
-    async def run_rag_export_preview(payload: RagExportRequest) -> CommandPreviewResponse:
+    @app.post("/api/v1/run/rag-export/dry-run", response_model=APIEnvelope)
+    async def run_rag_export_preview(payload: RagExportRequest) -> APIEnvelope:
         return _preview(
             lambda: build_rag_export_command(
                 settings,
@@ -409,8 +355,8 @@ def register_routes(app: FastAPI) -> None:
             )
         )
 
-    @app.post("/api/v1/run/rag-doctor", response_model=JobResponse)
-    async def run_rag_doctor(payload: RagDoctorRequest) -> JobResponse:
+    @app.post("/api/v1/run/rag-doctor", response_model=APIEnvelope)
+    async def run_rag_doctor(payload: RagDoctorRequest) -> APIEnvelope:
         return _schedule(
             lambda: build_rag_doctor_command(
                 settings,
@@ -421,8 +367,8 @@ def register_routes(app: FastAPI) -> None:
             )
         )
 
-    @app.post("/api/v1/run/rag-doctor/dry-run", response_model=CommandPreviewResponse)
-    async def run_rag_doctor_preview(payload: RagDoctorRequest) -> CommandPreviewResponse:
+    @app.post("/api/v1/run/rag-doctor/dry-run", response_model=APIEnvelope)
+    async def run_rag_doctor_preview(payload: RagDoctorRequest) -> APIEnvelope:
         return _preview(
             lambda: build_rag_doctor_command(
                 settings,
@@ -433,8 +379,8 @@ def register_routes(app: FastAPI) -> None:
             )
         )
 
-    @app.post("/api/v1/run/rag-query", response_model=JobResponse)
-    async def run_rag_query(payload: RagQueryRequest) -> JobResponse:
+    @app.post("/api/v1/run/rag-query", response_model=APIEnvelope)
+    async def run_rag_query(payload: RagQueryRequest) -> APIEnvelope:
         return _schedule(
             lambda: build_rag_query_command(
                 settings,
@@ -447,8 +393,8 @@ def register_routes(app: FastAPI) -> None:
             )
         )
 
-    @app.post("/api/v1/run/rag-query/dry-run", response_model=CommandPreviewResponse)
-    async def run_rag_query_preview(payload: RagQueryRequest) -> CommandPreviewResponse:
+    @app.post("/api/v1/run/rag-query/dry-run", response_model=APIEnvelope)
+    async def run_rag_query_preview(payload: RagQueryRequest) -> APIEnvelope:
         return _preview(
             lambda: build_rag_query_command(
                 settings,
@@ -461,34 +407,34 @@ def register_routes(app: FastAPI) -> None:
             )
         )
 
-    @app.get("/api/v1/jobs", response_model=JobsResponse)
-    async def list_jobs(limit: int = 100) -> JobsResponse:
+    @app.get("/api/v1/jobs", response_model=APIEnvelope)
+    async def list_jobs(limit: int = 100) -> APIEnvelope:
         jobs = job_manager.list_jobs(limit=limit)
-        return JobsResponse(jobs=jobs)
+        return success(JobsPayload(jobs=jobs))
 
-    @app.get("/api/v1/jobs/{job_id}", response_model=JobResponse)
-    async def job_detail(job_id: int) -> JobResponse:
+    @app.get("/api/v1/jobs/{job_id}", response_model=APIEnvelope)
+    async def job_detail(job_id: int) -> APIEnvelope:
         job = job_manager.get_job(job_id)
         if not job:
-            raise HTTPException(status_code=404, detail="Job introuvable")
-        return JobResponse(job=job)
+            raise_api_error("job_not_found", "Job introuvable", status_code=404)
+        return success(JobPayload(job=job))
 
-    @app.post("/api/v1/jobs/{job_id}/cancel", response_model=CancelResponse)
-    async def cancel_job(job_id: int) -> CancelResponse:
+    @app.post("/api/v1/jobs/{job_id}/cancel", response_model=APIEnvelope)
+    async def cancel_job(job_id: int) -> APIEnvelope:
         if not await job_manager.cancel_job(job_id):
-            raise HTTPException(status_code=409, detail="Impossible d'annuler ce job")
-        return CancelResponse(canceled=True)
+            raise_api_error("job_not_cancelable", "Impossible d'annuler ce job", status_code=409)
+        return success(CancelPayload(canceled=True))
 
-    @app.get("/api/v1/jobs/{job_id}/log", response_model=LogResponse)
-    async def job_log(job_id: int) -> LogResponse:
+    @app.get("/api/v1/jobs/{job_id}/log", response_model=APIEnvelope)
+    async def job_log(job_id: int) -> APIEnvelope:
         log = job_manager.read_log(job_id)
-        return LogResponse(job_id=job_id, log=log)
+        return success(LogPayload(job_id=job_id, log=log))
 
     @app.get("/api/v1/jobs/{job_id}/log/file")
     async def job_log_download(job_id: int):
         path = job_manager.log_file_path(job_id)
         if not path:
-            raise HTTPException(status_code=404, detail="Log introuvable")
+            raise_api_error("log_not_found", "Log introuvable", status_code=404)
         return FileResponse(path, filename=f"job_{job_id}.log")
 
     @app.websocket("/ws/jobs/{job_id}")
@@ -520,32 +466,62 @@ def register_routes(app: FastAPI) -> None:
         raise HTTPException(status_code=404, detail="Not found")
 
 
+def register_exception_handlers(app: FastAPI) -> None:
+    @app.exception_handler(HTTPException)
+    async def _http_exception_handler(request: Request, exc: HTTPException):
+        detail = exc.detail
+        if isinstance(detail, dict) and "code" in detail and "message" in detail:
+            payload = APIEnvelope(
+                data=None,
+                error=APIError(
+                    code=str(detail["code"]),
+                    message=str(detail["message"]),
+                    hint=detail.get("hint"),
+                ),
+            )
+        else:
+            payload = APIEnvelope(
+                data=None,
+                error=APIError(
+                    code="http_error",
+                    message=str(detail) if detail else "HTTP error",
+                ),
+            )
+        return JSONResponse(status_code=exc.status_code, content=payload.dict())
+
+
 def _build_job_payload(builder: Callable[[], JobCreate]) -> JobCreate:
     try:
         return builder()
     except CommandError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise_api_error("command_invalid", str(exc))
     except DocBusyError as exc:
-        detail = {"reason": "doc_busy", "doc_id": exc.doc_id, "job_id": exc.job_id}
-        raise HTTPException(status_code=409, detail=detail) from exc
+        raise_api_error(
+            "doc_busy",
+            "Document verrouillÃ© par un autre job",
+            hint=f"doc_id={exc.doc_id}, job_id={exc.job_id}",
+            status_code=409,
+        )
 
 
-def _schedule(builder: Callable[[], JobCreate]) -> JobResponse:
+def _schedule(builder: Callable[[], JobCreate]) -> APIEnvelope:
     payload = _build_job_payload(builder)
     job = job_manager.create_job(payload)
     job_manager.schedule(job.id)
-    return JobResponse(job=job)
+    return success(JobPayload(job=job))
 
 
-def _preview(builder: Callable[[], JobCreate]) -> CommandPreviewResponse:
+def _preview(builder: Callable[[], JobCreate]) -> APIEnvelope:
     payload = _build_job_payload(builder)
-    return CommandPreviewResponse(
-        action=payload.action,
-        argv=payload.argv,
-        cwd=payload.cwd,
-        doc_id=payload.doc_id,
-        profile_id=payload.profile_id,
-        artifacts=payload.artifacts,
+    return success(
+        CommandPreviewPayload(
+            action=payload.action,
+            argv=payload.argv,
+            cwd=payload.cwd,
+            doc_id=payload.doc_id,
+            profile_id=payload.profile_id,
+            artifacts=payload.artifacts,
+        )
     )
 
 
@@ -553,7 +529,7 @@ def _get_doc_paths(doc_name: str) -> DocPaths:
     try:
         return resolve_doc(settings, doc_name)
     except ResolverError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise_api_error("doc_not_found", str(exc))
 
 
 app = create_app()

@@ -1,4 +1,5 @@
-import { DocInfo, GlossaryRule, JobRecord, PreviewResult, ProfilesResponse } from "../types";
+import { DocInfo, GlossaryRule, JobRecord, PreviewResult, ProfilesPayload } from "../types";
+import type { ApiEnvelope } from "../types";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "/api/v1";
 const API_KEY = import.meta.env.VITE_API_KEY;
@@ -20,20 +21,30 @@ async function apiRequest<T>(
     ...options,
     headers,
   });
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || response.statusText);
-  }
   if (response.status === 204) {
+    if (!response.ok) {
+      throw new Error(response.statusText);
+    }
     return null as T;
   }
-  return (await response.json()) as T;
+  const payload = (await response.json()) as ApiEnvelope<T>;
+  if (!response.ok || !payload) {
+    const text = payload ? JSON.stringify(payload) : await response.text();
+    throw new Error(text || response.statusText);
+  }
+  if (payload.error) {
+    throw new Error(payload.error.hint ?? payload.error.message);
+  }
+  if (payload.api_version !== "v1") {
+    throw new Error("API version mismatch");
+  }
+  return payload.data;
 }
 
 export const api = {
   async listDocs(): Promise<DocInfo[]> {
-    const res = await apiRequest<{ items: DocInfo[] }>("/docs");
-    return res.items;
+    const res = await apiRequest<{ docs: DocInfo[] }>("/docs");
+    return res.docs;
   },
   async getDoc(name: string): Promise<DocInfo> {
     const res = await apiRequest<{ doc: DocInfo }>(
@@ -62,8 +73,8 @@ export const api = {
     );
     return res.preview;
   },
-  async listProfiles(): Promise<ProfilesResponse> {
-    return apiRequest<ProfilesResponse>("/profiles");
+  async listProfiles(): Promise<ProfilesPayload> {
+    return apiRequest<ProfilesPayload>("/profiles");
   },
   async runAsrBatch(payload: Json = {}) {
     const res = await apiRequest<{ job: JobRecord }>("/run/asr-batch", {

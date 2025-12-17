@@ -2,12 +2,14 @@
 numpy>=1.26
 soundfile>=0.12
 pydub>=0.25
+pydantic>=2.5,<3.0
 pyyaml>=6.0.1
 tqdm>=4.66
 rich>=13.7
 huggingface-hub>=0.19
 langdetect>=1.0.9
 psutil>=5.9
+ftfy>=6.2
 
 # Roues PyTorch CUDA (Win GPU) disponibles sur l'index officiel
 --extra-index-url https://download.pytorch.org/whl/cu124

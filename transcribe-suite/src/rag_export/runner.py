@@ -8,7 +8,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import hashlib
 
@@ -22,6 +22,7 @@ from .generation import (
     rel_path,
     build_chunks_from_segments,
     build_llm_chunks,
+    build_embedding_view,
     build_manifest,
     build_quality_report,
     build_sqlite_index,
@@ -33,6 +34,8 @@ from .generation import (
     write_readme,
 )
 from .resolver import InputResolver, ResolvedPaths
+from .pipeline import resolve_rag_output_override
+from .glossary import load_glossary_rules, merge_glossary_rules
 
 
 @dataclass
@@ -83,7 +86,11 @@ class RAGExportRunner:
         return candidate
 
     def _resolve_output_root(self) -> Path:
-        output_dir = Path(self.config.get("output_dir") or "RAG")
+        override = resolve_rag_output_override()
+        if override:
+            output_dir = override
+        else:
+            output_dir = Path(self.config.get("output_dir") or "RAG")
         if not output_dir.is_absolute():
             output_dir = (PROJECT_ROOT / output_dir).resolve()
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -201,6 +208,25 @@ class RAGExportRunner:
         write_json(target_dir / "document.json", manifest, sort_keys=True)
         write_jsonl(target_dir / "segments.jsonl", segments)
         write_jsonl(target_dir / "chunks.jsonl", chunks)
+        text_norm_cfg = dict(self.config.get("text_normalization") or {})
+        validated_rules = self._load_validated_glossary(resolved.work_dir)
+        if validated_rules:
+            merged_rules = merge_glossary_rules(text_norm_cfg.get("glossary") or [], validated_rules)
+            text_norm_cfg["glossary"] = merged_rules
+        else:
+            text_norm_cfg.setdefault("glossary", text_norm_cfg.get("glossary") or [])
+        embedding_view = build_embedding_view(
+            chunks,
+            doc_id=doc_id,
+            doc_title=resolved.doc_title,
+            doc_lang=doc_lang,
+            text_norm_cfg=text_norm_cfg,
+        )
+        if embedding_view:
+            embed_cfg = (text_norm_cfg.get("embedding_view") or {})
+            embed_name = embed_cfg.get("output_filename") or "chunks_for_embedding.jsonl"
+            write_jsonl(target_dir / embed_name, embedding_view)
+            self.logger.info("Vue embeddings créée: %s", target_dir / embed_name)
         if chunk_cfg.get("llm_chunks_enabled"):
             llm_chunks = build_llm_chunks(chunks, doc_id=doc_id, doc_title=resolved.doc_title, doc_lang=doc_lang)
             write_jsonl(target_dir / "chunks_for_llm.jsonl", llm_chunks)
@@ -339,3 +365,12 @@ class RAGExportRunner:
         overrides = self.config_bundle.cli_overrides or {}
         if overrides:
             self.logger.info("Overrides CLI appliqués: %s", overrides)
+
+    def _load_validated_glossary(self, work_dir: Path) -> List[Dict[str, str]]:
+        candidate = work_dir / "rag.glossary.yaml"
+        if not candidate.exists():
+            return []
+        rules = load_glossary_rules(candidate)
+        if rules:
+            self.logger.info("Glossaire validé détecté (%d règles): %s", len(rules), candidate)
+        return rules

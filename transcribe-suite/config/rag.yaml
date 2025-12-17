@@ -25,8 +25,31 @@ rag:
     url_template: "{base_url}?t={start_s}s"
     text_format: "{title} [{start_mmss}-{end_mmss}]"
     markdown_format: "[Voir extrait]({url}) ({start_mmss}-{end_mmss})"
+  text_normalization:
+    embedding_view:
+      enabled: true
+      output_filename: "chunks_for_embedding.jsonl"
+    acronym_whitelist:
+      - IA
+      - HTML
+      - CSS
+      - API
+      - GPU
+      - CPU
+      - ChatGPT
+      - Claude
+      - LLM
+      - NLP
+    glossary:
+      - pattern: '(?i)cloud 4\.5'
+        replacement: 'Claude 4.5'
+      - pattern: '(?i)nano banana'
+        replacement: 'Nana Banana'
+      - pattern: 'modÚles'
+        replacement: 'modules'
   health:
     coverage_target_pct: 0.95
+    encoding_sample_size: 64
     sample_queries:
       - "installation"
       - "the"

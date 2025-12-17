@@ -1,0 +1,38 @@
+{
+  "schema_version": "1.0.0",
+  "language": "fr",
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 8.0,
+      "text": "Cloude 4.5 arrive dans ce chapitre avant que Claude 4.5 ne corrige la prononciation pour Claude 4.5.",
+      "text_human": "Cloude 4.5 arrive dans ce chapitre avant que Claude 4.5 ne corrige la prononciation pour Claude 4.5.",
+      "speaker": "SPEAKER_00",
+      "words": []
+    },
+    {
+      "start": 8.0,
+      "end": 16.0,
+      "text": "La galaxy est citee juste apres une version galixy dont il faut se mefier et la galaxy officielle reste reference.",
+      "text_human": "La galaxy est citee juste apres une version galixy dont il faut se mefier et la galaxy officielle reste reference.",
+      "speaker": "SPEAKER_00",
+      "words": []
+    },
+    {
+      "start": 16.0,
+      "end": 24.0,
+      "text": "Nana Banana reste officielle mais certains transcrivent encore Nano Banana.",
+      "text_human": "Nana Banana reste officielle mais certains transcrivent encore Nano Banana.",
+      "speaker": "SPEAKER_00",
+      "words": []
+    },
+    {
+      "start": 24.0,
+      "end": 32.0,
+      "text": "Ces modÚles sont differents des modèles stabilises que nous voulons garder.",
+      "text_human": "Ces modÚles sont differents des modèles stabilises que nous voulons garder.",
+      "speaker": "SPEAKER_00",
+      "words": []
+    }
+  ]
+}

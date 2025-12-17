@@ -1,3 +1,15 @@
+export interface ApiError {
+  code: string;
+  message: string;
+  hint?: string | null;
+}
+
+export interface ApiEnvelope<T> {
+  api_version: string;
+  data: T;
+  error: ApiError | null;
+}
+
 export interface StampInfo {
   doc?: string | null;
   source_file?: string | null;
@@ -91,8 +103,7 @@ export interface ProfileEntry {
   args: string[];
 }
 
-export interface ProfilesResponse {
-  api_version: string;
+export interface ProfilesPayload {
   profiles: {
     version: number;
     asr: Record<string, ProfileEntry>;

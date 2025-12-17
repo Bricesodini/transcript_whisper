@@ -3,17 +3,31 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 set "NO_TK=1"
 
-REM === PATHS =========================================================
-set "NET_IN=\\bricesodini\Savoirs\Transcriptions\input"
-set "NET_OUT=\\bricesodini\Savoirs\Transcriptions\output"
-
 set "BIN_DIR=%~dp0"
 set "RUN_BAT=%BIN_DIR%run.bat"
 for %%I in ("%BIN_DIR%..") do set "ROOT=%%~fI"
 
+REM === PATHS =========================================================
+set "PIPELINE_ROOT=%DATA_PIPELINE_ROOT%"
+if not defined PIPELINE_ROOT set "PIPELINE_ROOT=\\bricesodini\Savoirs\03_data_pipeline"
+if defined PIPELINE_ROOT (
+  if exist "%PIPELINE_ROOT%\01_input" (
+    set "NET_IN=%PIPELINE_ROOT%\01_input"
+    set "NET_OUT=%PIPELINE_ROOT%\02_output_source\mono"
+  ) else (
+    set "PIPELINE_ROOT="
+  )
+)
+if not defined PIPELINE_ROOT (
+  set "NET_IN=%ROOT%\inputs"
+  set "NET_OUT=%ROOT%\exports"
+)
+
 REM === SANITY CHECKS ==================================================
 if not exist "%RUN_BAT%" (echo ERROR: run.bat introuvable & goto FAIL)
+if not exist "%NET_IN%" mkdir "%NET_IN%" >nul 2>&1
 if not exist "%NET_IN%" (echo ERROR: input introuvable & goto FAIL)
+if not exist "%NET_OUT%" mkdir "%NET_OUT%" >nul 2>&1
 if not exist "%NET_OUT%" (echo ERROR: output introuvable & goto FAIL)
 
 REM === LOOP ON INPUT FILES ===========================================

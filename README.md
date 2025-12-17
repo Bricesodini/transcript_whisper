@@ -129,7 +129,73 @@ bin/run.sh rag query --input "RAG-MonDoc/0.1.0" --query "installation" --top-k 5
 
 👉 Spécification détaillée et scénarios de migration : `docs/RAG_PDF_DESIGN.md`.
 
---- 
+---
+
+## 🗄️ NAS Data Pipeline (`\\bricesodini\Savoirs\03_data_pipeline`)
+
+Ce hub réseau sert de **pipeline de transit** pour automatiser les séries ASR → RAG sans remplacer la règle de base : `TRANSCRIPT - <Nom>` est créé **à côté du média au moment du run ASR**.
+
+> ⚠️ **Règle ASR** : `TRANSCRIPT - <Nom>` est créé **dans le même dossier que le média au moment du run**.  
+> Les batchs NAS **ne déplacent jamais les exports** ; ils déplacent uniquement le média vers `_processed/_failed` après traitement.
+
+### Arborescence standard
+
+```
+03_data_pipeline/
+  01_input/
+    audio/
+    video/
+    pdf/                  # préparation PDF (non implémenté)
+    _processed/..., _failed/...
+  02_output_source/
+    asr/                  # artefacts work/ + TRANSCRIPT staging pour rag-export
+    pdf/                  # placeholders PDF
+  03_output_RAG/          # sorties rag-export quand DATA_PIPELINE_ROOT est défini
+```
+
+### Workflow recommandé
+
+**Pré-requis** : le partage `\\bricesodini\Savoirs` doit être accessible (droits + réseau) avant de lancer les batchs.  
+Les scripts utilisent des chemins **UNC** (éviter les lecteurs mappés type `Z:\`).
+
+1. **Déposer les médias** (`.mp4/.mov/.mkv/.mp3/.wav/.m4a`) dans `01_input/audio` ou `01_input/video` (et futurs PDF dans `01_input/pdf`).
+2. **Lancer le batch ASR** : `bin\pipeline_asr_batch.bat [options run]`
+   - Traite chaque fichier en série via `bin\run.bat run --input "<UNC>" ...`.
+   - Copie automatiquement le dossier `TRANSCRIPT - <Nom>` (resté à côté du média) + `work/<Nom>` dans `02_output_source\asr\<doc>\`.
+   - Déplace les médias vers `01_input\_processed\...` (ou `_failed`) sans toucher aux exports adjacents.
+3. **(NOUVEAU) Batch lexicon** : `bin\pipeline_lexicon_batch.bat [--scan-only|--apply]`
+   - Scanne `02_output_source\asr\<doc>\work\<doc>` avec `bin\run.bat rag lexicon scan --input "<work>"`.
+   - Produit `rag.glossary.suggested.yaml` (propositions) et, en mode `--apply`, promeut vers `rag.glossary.yaml` + `.lexicon_ok.json` (hash de `05_polished.json`/fallback).
+   - Par défaut, un document validé + stamp aligné est **SKIP** ; `--force` rescanne malgré tout. Voir `docs/RAG_LEXICON_WORKFLOW.md` pour la boucle complète de validation.
+4. **Lancer le batch RAG** : `bin\pipeline_rag_batch.bat [--query mot] [options rag]`
+   - Parcourt `02_output_source\asr\*`, exécute `bin\run.bat rag --input "<doc>\work\<Nom>" --force`.
+   - `DATA_PIPELINE_ROOT` est automatiquement défini pour écrire dans `03_output_RAG`.
+   - Résultat : exports dans `\\bricesodini\Savoirs\03_data_pipeline\03_output_RAG\RAG-<doc_id>\...`.
+   - Enchaîne `rag doctor` (obligatoire) puis, si demandé, `rag query --query "<mot>"`.
+4. **Consommer les artefacts** : `02_output_source\asr\*` contient les inputs sources (work + transcripts), tandis que `03_output_RAG\RAG-<doc_id>` héberge les artefacts RAG versionnés prêts à indexer.
+
+### Exemple d’utilisation
+
+```powershell
+cd D:\02_dev\scripts\transcribe-suite\transcribe-suite
+bin\pipeline_asr_batch.bat --lang auto --profile talkshow
+bin\pipeline_lexicon_batch.bat --scan-only
+# (review/edit rag.glossary.suggested.yaml)
+bin\pipeline_lexicon_batch.bat --apply
+bin\pipeline_rag_batch.bat --version-tag nas_v1 --query installation
+```
+
+- Tous les arguments restants sont transmis aux commandes `rag` / `rag doctor` (ex. `--version-tag`, `--no-sqlite`, `--doc-id`…).
+- `DATA_PIPELINE_ROOT` peut aussi être défini manuellement dans votre shell pour rediriger n’importe quel `rag-export` vers `\\bricesodini\Savoirs\03_data_pipeline\03_output_RAG` (lorsqu’il est absent, la sortie reste dans `RAG/` à la racine du dépôt).
+- `02_output_source\pdf` est déjà provisionné ; l’ingestion PDF suivra le design documenté dans `docs/RAG_PDF_DESIGN.md`.
+- Détails et conventions du workflow lexicon : `docs/RAG_LEXICON_WORKFLOW.md`.
+
+**DATA_PIPELINE_ROOT**
+- Valeur recommandée (UNC) : `\\bricesodini\Savoirs\03_data_pipeline`
+- Si défini : les exports `rag` écrivent dans `03_output_RAG` (pipeline NAS).
+- Si absent : les exports `rag` restent dans `RAG/` à la racine du dépôt (comportement par défaut).
+
+---
 
 ## 🧹 Post-traitement & QA éditoriale
 

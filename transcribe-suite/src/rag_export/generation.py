@@ -17,6 +17,7 @@ from utils import PipelineError, stable_id, write_json
 
 from . import PROJECT_ROOT, RAG_SCHEMA_VERSION
 from .resolver import ResolvedPaths
+from .text_processing import compile_glossary_rules, fix_mojibake, normalize_for_embedding
 
 SegmentRecord = Dict[str, Any]
 ChunkRecord = Dict[str, Any]
@@ -31,6 +32,7 @@ def load_segments(resolved: ResolvedPaths, *, source_label: str = "05_polished")
         start = round(float(raw.get("start", 0.0)), 3)
         end = round(float(raw.get("end", start)), 3)
         text = (raw.get("text_human") or raw.get("text") or "").strip()
+        text = fix_mojibake(text)
         speaker = raw.get("speaker")
         confidence = _segment_confidence(raw)
         if confidence is not None:
@@ -230,6 +232,45 @@ def build_llm_chunks(
     return llm_chunks
 
 
+def build_embedding_view(
+    chunks: List[ChunkRecord],
+    *,
+    doc_id: str,
+    doc_title: str,
+    doc_lang: str,
+    text_norm_cfg: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    if not chunks:
+        return []
+    view_cfg = (text_norm_cfg or {}).get("embedding_view") or {}
+    if not view_cfg.get("enabled", True):
+        return []
+    acronyms = text_norm_cfg.get("acronym_whitelist")
+    glossary_rules = compile_glossary_rules(text_norm_cfg.get("glossary") or [])
+    records: List[Dict[str, Any]] = []
+    for chunk in chunks:
+        raw_text = chunk.get("text") or ""
+        normalized = normalize_for_embedding(
+            raw_text,
+            acronyms=acronyms,
+            glossary_rules=glossary_rules,
+        )
+        normalized = normalized or raw_text.strip()
+        records.append(
+            {
+                "chunk_id": chunk["chunk_id"],
+                "doc_id": doc_id,
+                "doc_title": doc_title,
+                "lang": doc_lang,
+                "start": chunk["start"],
+                "end": chunk["end"],
+                "text_raw": raw_text,
+                "text_norm": normalized,
+            }
+        )
+    return records
+
+
 def load_existing_chunks(
     path: Path,
     *,
@@ -261,6 +302,7 @@ def load_existing_chunks(
         start = float(raw.get("start") or raw.get("ts_start") or raw.get("t0") or 0.0)
         end = float(raw.get("end") or raw.get("ts_end") or raw.get("t1") or start)
         text = (raw.get("text") or raw.get("text_human") or raw.get("content") or "").strip()
+        text = fix_mojibake(text)
         raw_conf = raw.get("confidence") or raw.get("confidence_mean") or raw.get("score")
         confidence = round(float(raw_conf), 3) if raw_conf is not None else None
         segment_ids = _segment_ids_for_range(segments, start, end)
@@ -394,7 +436,7 @@ def build_stats(
 
 def write_jsonl(path: Path, rows: Iterable[Dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
+    with path.open("w", encoding="utf-8", newline="\n") as fh:
         for row in rows:
             fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
             fh.write("\n")
@@ -420,7 +462,9 @@ def write_readme(path: Path, *, doc_id: str, doc_title: str, generated_at: str, 
         "",
         f"Sorties enregistrées dans `{output_dir}`.",
     ]
-    path.write_text("\n".join(lines), encoding="utf-8")
+    with path.open("w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines))
+        fh.write("\n")
 
 
 def build_sqlite_index(chunks: List[ChunkRecord], target_path: Path) -> None:
@@ -436,7 +480,9 @@ def build_sqlite_index(chunks: List[ChunkRecord], target_path: Path) -> None:
             "INSERT INTO chunks(chunk_id, doc_id, start, end, confidence, text) VALUES (?, ?, ?, ?, ?, ?)",
             [(chunk["chunk_id"], chunk["doc_id"], chunk["start"], chunk["end"], chunk.get("confidence"), chunk["text"]) for chunk in chunks],
         )
-        conn.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id, doc_id, text)")
+        conn.execute(
+            "CREATE VIRTUAL TABLE chunks_fts USING fts5(chunk_id, doc_id, text, tokenize = 'unicode61 remove_diacritics 2')"
+        )
         conn.executemany(
             "INSERT INTO chunks_fts(chunk_id, doc_id, text) VALUES (?, ?, ?)",
             [(chunk["chunk_id"], chunk["doc_id"], chunk["text"]) for chunk in chunks],
@@ -509,7 +555,7 @@ def compute_file_sha256(path: Optional[Path]) -> Optional[str]:
 
 def write_config_effective(path: Path, config: Dict[str, Any]) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as fh:
+    with path.open("w", encoding="utf-8", newline="\n") as fh:
         yaml.safe_dump(config, fh, allow_unicode=True, sort_keys=True)
     sha = compute_file_sha256(path)
     return sha or ""

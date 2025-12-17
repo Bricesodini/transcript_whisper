@@ -186,8 +186,15 @@ class InputResolver:
         if media_path:
             candidates.append(media_path.parent)
         if entry.is_dir():
-            candidates.append(entry)
-            candidates.append(entry.parent)
+            current = entry
+            visited = set()
+            for _ in range(4):
+                if current and current not in visited:
+                    candidates.append(current)
+                    visited.add(current)
+                if not current or current.parent == current:
+                    break
+                current = current.parent
         candidates.append(self.project_root)
         for base in candidates:
             if not base or not base.exists():

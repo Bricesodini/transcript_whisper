@@ -91,10 +91,11 @@ Security guardrails:
 
 ## Tests
 
-1. Installez les dépendances backend + dev :  
-   `pip install -r control_room/backend/requirements.txt -r transcribe-suite/requirements-dev.txt`
+1. Installez les dépendances backend + dev (depuis la racine du dépôt) :  
+   `pip install -r control_room/backend/requirements.txt`  
+   `pip install -r transcribe-suite/requirements-dev.txt`
 2. Lancez toute la suite fondations via une seule commande :  
-   `pytest tests/control_room`
+   `python -m pytest tests/control_room`
 
 ## Environment variables
 

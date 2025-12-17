@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import { DocInfo, DocState, GlossaryRule, PreviewResult, ProfilesResponse } from "../types";
+import { DocInfo, DocState, GlossaryRule, PreviewResult, ProfilesPayload } from "../types";
 
 const stateLabels: Record<DocState, string> = {
   MISSING: "Manquant",
@@ -29,7 +29,7 @@ const DocumentDetailPage = () => {
   const [previewReplacement, setPreviewReplacement] = useState("");
   const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null);
   const [suggestedEtag, setSuggestedEtag] = useState<string | null>(null);
-  const [profiles, setProfiles] = useState<ProfilesResponse | null>(null);
+  const [profiles, setProfiles] = useState<ProfilesPayload | null>(null);
   const [lexiconProfile, setLexiconProfile] = useState<string>("default");
   const [ragProfile, setRagProfile] = useState<string>("default");
   const [activeTab, setActiveTab] = useState<TabKey>("glossary");
