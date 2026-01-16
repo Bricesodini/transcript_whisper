@@ -4,7 +4,7 @@ import json
 import os
 import re
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from enum import Enum
 from hashlib import sha256
@@ -70,9 +70,6 @@ class DocInfo(BaseModel):
     locked_by_job_id: Optional[int]
     locked_action: Optional[JobAction]
     suggested_etag: Optional[str]
-
-    class Config:
-        json_encoders = {Path: lambda v: str(v) if v else None}
 
 
 def scan_documents(settings: Settings, jobs: JobManager) -> List[DocInfo]:
@@ -310,7 +307,7 @@ def save_validated_glossary(
         os.fsync(handle.fileno())
     if path.exists():
         backup = path.with_name(
-            f"{path.name}.bak.{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+            f"{path.name}.bak.{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
         )
         shutil.copy2(path, backup)
     os.replace(tmp_path, path)

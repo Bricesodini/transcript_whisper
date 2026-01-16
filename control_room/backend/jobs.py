@@ -57,12 +57,6 @@ class JobRecord(JobBase):
     failure_type: FailureReason = FailureReason.NONE
     failure_hint: Optional[str] = None
 
-    class Config:
-        json_encoders = {
-            Path: lambda v: str(v),
-            datetime: lambda v: v.isoformat(),
-        }
-
 
 def serialize_command(cmd: List[str]) -> str:
     return json.dumps(cmd, ensure_ascii=False)

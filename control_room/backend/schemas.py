@@ -63,9 +63,6 @@ class CommandPreviewPayload(BaseModel):
     profile_id: Optional[str]
     artifacts: List[str]
 
-    class Config:
-        json_encoders = {Path: lambda v: str(v) if v else None}
-
 
 class LogPayload(BaseModel):
     job_id: int

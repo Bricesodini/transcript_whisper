@@ -501,7 +501,7 @@ def register_exception_handlers(app: FastAPI) -> None:
                     message=str(detail) if detail else "HTTP error",
                 ),
             )
-        return JSONResponse(status_code=exc.status_code, content=payload.dict())
+        return JSONResponse(status_code=exc.status_code, content=payload.model_dump(mode="json"))
 
 
 def _build_job_payload(builder: Callable[[], JobCreate]) -> JobCreate:

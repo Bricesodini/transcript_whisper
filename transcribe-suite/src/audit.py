@@ -23,7 +23,7 @@ class AuditReporter:
         low_conf_path: Optional[Path] = None,
         glossary_conflicts: Optional[List[Dict[str, str]]] = None,
     ) -> str:
-        timestamp = dt.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        timestamp = dt.datetime.now(dt.UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
         lines: List[str] = [f"# Audit post-traitement — {media_name}", f"_Généré le {timestamp} (langue: {language})_"]
 
         if clean_report:
