@@ -3,6 +3,7 @@ setlocal
 set "SCRIPT_DIR=%~dp0"
 
 call :SetupCudaPath
+call :SetupPython
 
 powershell -NoLogo -ExecutionPolicy Bypass -File "%SCRIPT_DIR%run.ps1" %*
 exit /b %ERRORLEVEL%
@@ -28,6 +29,17 @@ for %%D in (cublas cudnn cuda_runtime) do (
     if exist "%SITE_PACKAGES%\nvidia\%%D\bin" (
         call :PrependPath "%SITE_PACKAGES%\nvidia\%%D\bin"
     )
+)
+goto :EOF
+
+:SetupPython
+if defined PYTHON goto :EOF
+for %%I in ("%SCRIPT_DIR%..") do set "REPO_ROOT=%%~fI"
+for %%I in ("%REPO_ROOT%\..") do set "WORKSPACE_ROOT=%%~fI"
+
+set "VENV_PY=%WORKSPACE_ROOT%\.venv\Scripts\python.exe"
+if exist "%VENV_PY%" (
+    set "PYTHON=%VENV_PY%"
 )
 goto :EOF
 

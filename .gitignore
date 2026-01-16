@@ -2,6 +2,7 @@
 .venv/
 transcribe-suite/.venv/
 .env.local
+.hypothesis/
 
 # --- Build/output artifacts ---
 transcribe-suite/build/

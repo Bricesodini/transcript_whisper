@@ -6,7 +6,7 @@ import yaml
 
 from rag_export.doc_id import compute_doc_id
 
-from tests.unit.test_rag_export_cli import FIXTURE_ROOT, _build_temp_config, _run_cli
+from .test_rag_export_cli import FIXTURE_ROOT, _build_temp_config, _run_cli
 
 
 def _copy_work_tree(tmp_path, doc_name="sample_doc_lexicon"):

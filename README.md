@@ -576,17 +576,17 @@ PYTHON=../.venv/Scripts/python.exe ./bin/env_check.sh
 - Symptôme d’un PATH incomplet : les logs Faster-Whisper contiennent `Could not locate cublasLt64_11.dll` puis `BrokenProcessPool` dès le stage ASR. Relance la commande via `bin\run.bat` (ou exporte `TS_VENV_DIR` si ton venv est ailleurs) pour que les DLL soient injectées à chaque exécution.
 - Ce flux reste 100 % pip : pas besoin d’installer un CUDA Toolkit système ni de jouer avec `nvcc`. Les wheels pin (torch 2.6.0+cu124, whisperx 3.4.0, ctranslate2 4.4.0, etc.) sont alignées avec ces DLL et loguées dans `work/<media>/logs/run_manifest.json`.
 
-- Pour traiter un m?dia situ? dans `\\bricesodini\Savoirs\Transcriptions\input` et recopier automatiquement la transcription (`TRANSCRIPT - <Nom>`) + les logs dans `\\bricesodini\Savoirs\Transcriptions\output`, utilise :
+- Pour traiter un media present dans `\\bricesodini\Savoirs\Transcriptions\input` et recopier automatiquement la transcription (`TRANSCRIPT - <Nom>`) + les logs dans `\\bricesodini\Savoirs\Transcriptions\output`, lance simplement :
 
 ```bat
-bin\transcribe_share.bat MonFichier.mp4 --lang auto --export txt,md,json
+bin\transcribe_share.bat
 ```
 
-  - Argument 1 = nom du fichier dans `input` (ou chemin absolu).
-  - Les arguments suppl?mentaires sont transmis tels quels ? la CLI (`--lang`, `--export`, etc.).
-  - Après succès : `\\bricesodini\Savoirs\Transcriptions\output\<Nom>\TRANSCRIPT - <Nom>` contient les exports, `...\logs` reprend `work/<Nom>/logs`. Le batch lit désormais `work/<Nom>/logs/run_manifest.json` (`export_dir`) plutôt qu’un pattern `__tmp_*`.
+  - Le script scanne `input` et traite tous les fichiers `.mp4/.wav/.mp3/.m4a` en serie.
+  - Pour un seul fichier avec options, utilise `bin\\run.bat --input "\\\\bricesodini\\Savoirs\\Transcriptions\\input\\MonFichier.mp4" --lang auto --export txt,md,json`.
+  - Apres succes : `\\bricesodini\Savoirs\Transcriptions\output\<Nom>\TRANSCRIPT - <Nom>` contient les exports, `...\logs` reprend `work\<Nom>\logs`. Le batch lit `work\<Nom>\logs\run_manifest.json` (`export_dir`) plutot qu'un pattern `__tmp_*`.
 
-- Ensuite, force CUDA si besoin (sinon `auto` d?tectera la pr?sence du GPU) :
+- Ensuite, force CUDA si besoin (sinon `auto` detectera la presence du GPU) :
 
 ```bash
 bin/run.sh run \
@@ -1010,10 +1010,10 @@ Les logs détaillés sont dans `transcribe-suite/logs/`.
 
 ### Batch Windows `bin\transcribe_share.bat`
 
-- **Où sont les logs ?** Chaque exécution crée `\\bricesodini\Savoirs\Transcriptions\output\<Nom>\run_YYYYMMDD_HHMMSS.log` (copie du `share_stage\logs\*.log`) et le dossier `work` associé (`...\<Nom>\work\logs\...`). C’est la première source à consulter.
-- **Aucun fichier détecté** : la fenêtre affiche `[transcribe] Aucun fichier media...`. Déposez un `.mp4/.wav/.mp3/.m4a` dans `\\...\input`, relancez, la fenêtre reste ouverte tant que rien n’est disponible.
-- **Input/output inaccessibles** : le script échoue immédiatement avec un message `ERREUR: Dossier ... inaccessible`. Vérifiez que le partage NAS est monté (droits + VPN) et que `\\bricesodini\Savoirs\Transcriptions\input` / `output` sont atteignables depuis l’explorateur avant de relancer.
-- **Run en échec** : la fenêtre reste ouverte, le log cite le code retour. Ouvrez le `run_*.log` du dossier output puis (si besoin) `work\logs\run.log` pour l’erreur détaillée. Corrigez (token, CUDA, fichier corrompu…), laissez `\\...\input` vide (le .bat a déplacé le média en `_processed` seulement en cas de succès) puis relancez.
+- **Ou sont les logs ?** Chaque execution cree `\\bricesodini\Savoirs\Transcriptions\output\<Nom>\run_YYYYMMDD_HHMMSS.log` (copie du `share_stage\logs\*.log`) et le dossier `work` associe (`...\<Nom>\work\logs\...`). C'est la premiere source a consulter.
+- **Aucun fichier detecte** : le script termine apres avoir affiche `Termine : 0 fichier(s).` Deposez un `.mp4/.wav/.mp3/.m4a` dans `\\...\input` puis relancez.
+- **Input/output inaccessibles** : le script echoue immediatement avec un message `ERREUR: Dossier ... inaccessible`. Verifiez que le partage NAS est monte (droits + VPN) et que `\\bricesodini\Savoirs\Transcriptions\input` / `output` sont atteignables avant de relancer.
+- **Run en echec** : le script sort avec un code non nul. Ouvrez le `run_*.log` du dossier output puis (si besoin) `work\logs\run.log` pour l'erreur detaillee. Corrigez (token, CUDA, fichier corrompu), laissez `\\...\input` vide (le .bat deplace le media en `_processed` seulement en cas de succes) puis relancez.
 
 ---
 
